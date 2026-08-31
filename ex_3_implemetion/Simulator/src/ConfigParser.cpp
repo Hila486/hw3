@@ -167,8 +167,15 @@ common::types::MissionConfigData ConfigParser::parseMissionConfig(
     const double gps_res = requireAnyValue<double>(config, {"gps_resolution_cm", "gps_resolution"}, context);
     mission_config.gps_resolution = gps_res * x_extent[cm];
 
-    mission_config.output_mapping_resolution_factor =
-        optionalValue<double>(config, "output_mapping_resolution_factor", 1.0);
+    if (config["output_mapping_resolution_factor"]) {
+        const double raw_factor = config["output_mapping_resolution_factor"].as<double>();
+        if (std::abs(raw_factor - std::round(raw_factor)) > 1e-6) {
+            throw std::runtime_error("output_mapping_resolution_factor must be an integer in " + context);
+        }
+        mission_config.output_mapping_resolution_factor = std::round(raw_factor);
+    } else {
+        mission_config.output_mapping_resolution_factor = 1.0;
+    }
 
     YAML::Node bounds_node = config["boundaries"] ? config["boundaries"] : config["mission_bounds"];
     if (!bounds_node) {

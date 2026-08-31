@@ -25,18 +25,15 @@ bool hasDesiredSoFiles(const std::filesystem::path& folder_path, const std::stri
         if (!std::filesystem::is_directory(folder_path)) {
             return false;
         }
-        bool found_any_so = false;
         for (const auto& entry : std::filesystem::directory_iterator(folder_path)) {
             if (entry.is_regular_file() && entry.path().extension() == ".so") {
-                found_any_so = true;
                 const std::string filename = entry.path().filename().string();
                 if (expected_prefix.empty() || filename.rfind(expected_prefix, 0) == 0) {
                     return true;
                 }
             }
         }
-        // Fallback: if no prefix-matching file found, return true if any .so exists
-        return found_any_so;
+        return false;
     } catch (...) {
         return false;
     }

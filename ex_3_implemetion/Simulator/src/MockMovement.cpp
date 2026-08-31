@@ -43,19 +43,24 @@ void MockMovement::checkRealMapCollision(const Position3D& position) const {
 
     const double radius_cm = drone_radius_.force_numerical_value_in(cm);
     if (radius_cm > 0.0) {
-        const double r = radius_cm;
-        const Position3D probe_points[] = {
-            Position3D{position.x + r * x_extent[cm], position.y, position.z},
-            Position3D{position.x - r * x_extent[cm], position.y, position.z},
-            Position3D{position.x, position.y + r * y_extent[cm], position.z},
-            Position3D{position.x, position.y - r * y_extent[cm], position.z},
-            Position3D{position.x, position.y, position.z + r * z_extent[cm]},
-            Position3D{position.x, position.y, position.z - r * z_extent[cm]}
-        };
+        const double res_cm = hidden_map_->getMapConfig().resolution.force_numerical_value_in(cm);
+        const double step_cm = res_cm > 0.0 ? std::max(res_cm * 0.5, 1.0) : 5.0;
+        const double r2 = radius_cm * radius_cm;
 
-        for (const auto& probe : probe_points) {
-            if (hidden_map_->atVoxel(probe) == common::types::VoxelOccupancy::Occupied) {
-                throw std::runtime_error("Drone collided with an occupied voxel on the actual map.");
+        for (double rx = -radius_cm; rx <= radius_cm; rx += step_cm) {
+            for (double ry = -radius_cm; ry <= radius_cm; ry += step_cm) {
+                for (double rz = -radius_cm; rz <= radius_cm; rz += step_cm) {
+                    if (rx * rx + ry * ry + rz * rz <= r2) {
+                        const Position3D probe{
+                            position.x + rx * x_extent[cm],
+                            position.y + ry * y_extent[cm],
+                            position.z + rz * z_extent[cm]
+                        };
+                        if (hidden_map_->atVoxel(probe) == common::types::VoxelOccupancy::Occupied) {
+                            throw std::runtime_error("Drone collided with an occupied voxel on the actual map.");
+                        }
+                    }
+                }
             }
         }
     }

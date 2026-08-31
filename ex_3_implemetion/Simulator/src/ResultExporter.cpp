@@ -66,8 +66,10 @@ struct ManagerRunSignature {
     std::vector<std::tuple<std::string, std::size_t, double>> run_outcomes;
 
     bool operator<(const ManagerRunSignature& other) const {
-        if (std::abs(total_score - other.total_score) > 1.0e-6) {
-            return total_score > other.total_score;
+        const long long this_score_q = static_cast<long long>(std::round(total_score * 100.0));
+        const long long other_score_q = static_cast<long long>(std::round(other.total_score * 100.0));
+        if (this_score_q != other_score_q) {
+            return this_score_q > other_score_q;
         }
         if (total_steps != other.total_steps) {
             return total_steps < other.total_steps;

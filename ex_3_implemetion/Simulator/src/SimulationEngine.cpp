@@ -179,7 +179,7 @@ SingleRunResult executeSingleRun(
         common::PhysicalLength output_resolution;
 
         if (factor < 1.0) {
-            result.resolution_request_status = "IGNORED_TOO_SMALL";
+            result.resolution_request_status = "IGNORED TOO SMALL";
             output_resolution = spec.mission_config.gps_resolution;
             ResultExporter::logErrorImmediately(
                 output_dir,
@@ -192,19 +192,12 @@ SingleRunResult executeSingleRun(
         }
         result.resolution_cm = output_resolution.force_numerical_value_in(cm);
 
-        // Derive output map voxel grid dimensions from mission_bounds and output_resolution
+        // Derive output map voxel grid dimensions matching the physical world building extent at output_resolution
         const double out_res_cm = result.resolution_cm > 0.0 ? result.resolution_cm : 10.0;
-        const double mb_x_len = spec.mission_config.mission_bounds.max_x.force_numerical_value_in(cm) -
-                                spec.mission_config.mission_bounds.min_x.force_numerical_value_in(cm);
-        const double mb_y_len = spec.mission_config.mission_bounds.max_y.force_numerical_value_in(cm) -
-                                spec.mission_config.mission_bounds.min_y.force_numerical_value_in(cm);
-        const double mb_z_len = spec.mission_config.mission_bounds.max_height.force_numerical_value_in(cm) -
-                                spec.mission_config.mission_bounds.min_height.force_numerical_value_in(cm);
-
         NpyMapShape output_shape{
-            static_cast<std::size_t>(std::max(1.0, std::ceil(mb_x_len / out_res_cm))),
-            static_cast<std::size_t>(std::max(1.0, std::ceil(mb_y_len / out_res_cm))),
-            static_cast<std::size_t>(std::max(1.0, std::ceil(mb_z_len / out_res_cm)))
+            static_cast<std::size_t>(std::max(1.0, std::ceil(full_width_cm / out_res_cm))),
+            static_cast<std::size_t>(std::max(1.0, std::ceil(full_length_cm / out_res_cm))),
+            static_cast<std::size_t>(std::max(1.0, std::ceil(full_height_cm / out_res_cm)))
         };
 
         auto output_map_data = makeFilledIntNpyArray(
@@ -350,12 +343,9 @@ bool SimulationEngine::run() {
 // Comparative mode
 // ─────────────────────────────────────────────────────────────────────────────
 bool SimulationEngine::runComparative() {
-    auto mc_files = discoverSoFiles(args_.mission_control_folder, "MissionControl");
+    const auto mc_files = discoverSoFiles(args_.mission_control_folder, "MissionControl");
     if (mc_files.empty()) {
-        mc_files = discoverSoFiles(args_.mission_control_folder);
-    }
-    if (mc_files.empty()) {
-        std::cerr << "Error: No .so files found in: "
+        std::cerr << "Error: No MissionControl*.so files found in: "
                   << args_.mission_control_folder.string() << "\n";
         return false;
     }
@@ -571,12 +561,9 @@ bool SimulationEngine::runComparative() {
 // Competitive mode
 // ─────────────────────────────────────────────────────────────────────────────
 bool SimulationEngine::runCompetitive() {
-    auto algo_files = discoverSoFiles(args_.algorithms_folder, "Algorithm");
+    const auto algo_files = discoverSoFiles(args_.algorithms_folder, "Algorithm");
     if (algo_files.empty()) {
-        algo_files = discoverSoFiles(args_.algorithms_folder);
-    }
-    if (algo_files.empty()) {
-        std::cerr << "Error: No .so files found in: "
+        std::cerr << "Error: No Algorithm*.so files found in: "
                   << args_.algorithms_folder.string() << "\n";
         return false;
     }
