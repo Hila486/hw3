@@ -13,7 +13,6 @@ function(drone_warnings target)
 endfunction()
 
 add_subdirectory(common)
-add_subdirectory(UserCommon)
 add_subdirectory(Algorithm)
 add_subdirectory(MissionControl)
 add_subdirectory(Simulator)

@@ -1,5 +1,6 @@
 #include <UserCommon/MockMovement.h>
 
+#include <algorithm>
 #include <cmath>
 #include <mp-units/systems/si/math.h>
 #include <stdexcept>
@@ -58,7 +59,7 @@ common::types::MovementResult MockMovement::rotate(common::types::RotationDirect
 }
 
 /**
- * @brief Advances drone forward in 2D horizontal direction and updates simulated GPS position.
+ * @brief Advances drone forward in 2D horizontal direction with full swept path collision checking.
  */
 common::types::MovementResult MockMovement::advance(PhysicalLength distance) {
     const Position3D current_pos = gps_.position();
@@ -76,14 +77,27 @@ common::types::MovementResult MockMovement::advance(PhysicalLength distance) {
         current_pos.z,
     };
 
-    checkRealMapCollision(new_pos);
+    double step_size_cm = 1.0;
+    if (hidden_map_ != nullptr) {
+        step_size_cm = std::max(0.5, hidden_map_->getMapConfig().resolution.force_numerical_value_in(cm) * 0.5);
+    }
+    const std::size_t num_samples = std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil(std::abs(distance_cm) / step_size_cm)));
+    for (std::size_t i = 1; i <= num_samples; ++i) {
+        const double frac = static_cast<double>(i) / static_cast<double>(num_samples);
+        Position3D sample_pos{
+            current_pos.x + frac * dx_cm * x_extent[cm],
+            current_pos.y + frac * dy_cm * y_extent[cm],
+            current_pos.z,
+        };
+        checkRealMapCollision(sample_pos);
+    }
 
     gps_.setPosition(new_pos);
     return common::types::MovementResult{true, {}};
 }
 
 /**
- * @brief Elevates drone vertically and updates simulated GPS position.
+ * @brief Elevates drone vertically with full swept path collision checking.
  */
 common::types::MovementResult MockMovement::elevate(PhysicalLength distance) {
     const Position3D current_pos = gps_.position();
@@ -95,7 +109,20 @@ common::types::MovementResult MockMovement::elevate(PhysicalLength distance) {
         current_pos.z + distance_cm * z_extent[cm],
     };
 
-    checkRealMapCollision(new_pos);
+    double step_size_cm = 1.0;
+    if (hidden_map_ != nullptr) {
+        step_size_cm = std::max(0.5, hidden_map_->getMapConfig().resolution.force_numerical_value_in(cm) * 0.5);
+    }
+    const std::size_t num_samples = std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil(std::abs(distance_cm) / step_size_cm)));
+    for (std::size_t i = 1; i <= num_samples; ++i) {
+        const double frac = static_cast<double>(i) / static_cast<double>(num_samples);
+        Position3D sample_pos{
+            current_pos.x,
+            current_pos.y,
+            current_pos.z + frac * distance_cm * z_extent[cm],
+        };
+        checkRealMapCollision(sample_pos);
+    }
 
     gps_.setPosition(new_pos);
     return common::types::MovementResult{true, {}};

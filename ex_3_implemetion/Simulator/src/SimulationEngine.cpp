@@ -4,15 +4,16 @@
  *
  * Key design decisions:
  * - All .so files are pre-loaded ONCE on the main thread before worker threads start.
- *   This prevents race conditions in the Registrar singleton and avoids repeated
- *   dlopen/dlclose per run (as prohibited by the assignment spec).
- * - Fine-grained job queue: Work is divided at the individual simulation run level
- *   (Cartesian specs) so all requested worker threads are utilized even with 1 plugin.
- * - Non-stopping error model: An error in one simulation run logs the error and records
- *   score -1.0, but does not abort the remaining simulation runs for that plugin.
- * - Strict .so lifetime safety: All instantiated algorithm and mission control objects
- *   and factory function objects are destroyed BEFORE dlclose/unload is executed.
- * - Full Assignment-2 style per-SO YAML reports and aggregate summary reports.
+ * - Flat simulation job table: Work is divided at the individual simulation run level
+ *   (Cartesian specs) so all requested worker threads are utilized.
+ * - Thread count compliance: When jobs.size() < 2 or num_threads <= 1, runs on main thread;
+ *   otherwise spawns N workers. Total threads is NEVER 2.
+ * - Strict .so lifetime safety: All instantiated algorithm and mission control objects,
+ *   factory variables, and options are destroyed BEFORE dlclose/unload is executed.
+ * - Resolution factor: Based on mission_config.gps_resolution; if < 1, logs error and
+ *   sets status IGNORED_TOO_SMALL.
+ * - Non-stopping error model: An error in one run logs immediately and records score -1.0,
+ *   without aborting the remaining simulation runs.
  */
 
 #include <Simulator/SimulationEngine.h>
@@ -51,13 +52,17 @@ using namespace user_common_207610130_215664087;
 /// Discovers all .so files in a folder, sorted by path.
 std::vector<std::filesystem::path> discoverSoFiles(const std::filesystem::path& folder) {
     std::vector<std::filesystem::path> files;
-    if (!std::filesystem::is_directory(folder)) {
-        return files;
-    }
-    for (const auto& entry : std::filesystem::directory_iterator(folder)) {
-        if (entry.is_regular_file() && entry.path().extension() == ".so") {
-            files.push_back(entry.path());
+    try {
+        if (!std::filesystem::is_directory(folder)) {
+            return files;
         }
+        for (const auto& entry : std::filesystem::directory_iterator(folder)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".so") {
+                files.push_back(entry.path());
+            }
+        }
+    } catch (...) {
+        return files;
     }
     std::sort(files.begin(), files.end());
     return files;
@@ -158,7 +163,6 @@ SingleRunResult executeSingleRun(
         // --- Load ground truth (hidden) map from .npy file ---
         auto hidden_map_data = loadNormalizedNpyMap(spec.simulation_config.map_filename);
 
-        // MapConfig field order: {MappingBounds boundaries, Position3D offset, PhysicalLength resolution}
         common::types::MapConfig hidden_map_config{
             spec.mission_config.mission_bounds,
             spec.simulation_config.map_axes_offset,
@@ -166,27 +170,33 @@ SingleRunResult executeSingleRun(
         };
         Map3DImpl hidden_map(hidden_map_data, hidden_map_config);
 
-        // --- Create output map, applying output_mapping_resolution_factor ---
-        NpyMapShape hidden_shape = npyMapShape(*hidden_map_data, spec.simulation_config.map_filename);
+        // --- Output mapping resolution based on GPS resolution ---
+        const double factor = spec.mission_config.output_mapping_resolution_factor;
+        common::PhysicalLength output_resolution;
 
-        double resolution_factor = spec.mission_config.output_mapping_resolution_factor;
-        if (resolution_factor <= 0.0) {
-            resolution_factor = 1.0;
+        if (factor < 1.0) {
+            result.resolution_request_status = "IGNORED_TOO_SMALL";
+            output_resolution = spec.mission_config.gps_resolution;
+            ResultExporter::logErrorImmediately(
+                output_dir,
+                "[Run " + std::to_string(spec.run_index) +
+                "] output_mapping_resolution_factor < 1 (" + std::to_string(factor) +
+                ") is ignored. Using GPS resolution.");
+        } else {
+            result.resolution_request_status = "ACCEPTED";
+            output_resolution = spec.mission_config.gps_resolution * factor;
         }
-        const common::PhysicalLength output_resolution =
-            spec.simulation_config.map_resolution * resolution_factor;
         result.resolution_cm = output_resolution.force_numerical_value_in(cm);
-        result.resolution_request_status = "ACCEPTED";
 
-        NpyMapShape output_shape = hidden_shape;
-        if (std::abs(resolution_factor - 1.0) > 1.0e-9) {
-            output_shape.dim_x = static_cast<std::size_t>(
-                std::ceil(static_cast<double>(hidden_shape.dim_x) / resolution_factor));
-            output_shape.dim_y = static_cast<std::size_t>(
-                std::ceil(static_cast<double>(hidden_shape.dim_y) / resolution_factor));
-            output_shape.dim_z = static_cast<std::size_t>(
-                std::ceil(static_cast<double>(hidden_shape.dim_z) / resolution_factor));
-        }
+        // Compute output voxel dimensions relative to physical space
+        NpyMapShape hidden_shape = npyMapShape(*hidden_map_data, spec.simulation_config.map_filename);
+        const double map_res_cm = spec.simulation_config.map_resolution.force_numerical_value_in(cm);
+        const double out_res_cm = result.resolution_cm > 0.0 ? result.resolution_cm : 10.0;
+
+        NpyMapShape output_shape;
+        output_shape.dim_x = static_cast<std::size_t>(std::max(1.0, std::ceil(hidden_shape.dim_x * map_res_cm / out_res_cm)));
+        output_shape.dim_y = static_cast<std::size_t>(std::max(1.0, std::ceil(hidden_shape.dim_y * map_res_cm / out_res_cm)));
+        output_shape.dim_z = static_cast<std::size_t>(std::max(1.0, std::ceil(hidden_shape.dim_z * map_res_cm / out_res_cm)));
 
         auto output_map_data = makeFilledIntNpyArray(
             output_shape,
@@ -348,7 +358,6 @@ bool SimulationEngine::runComparative() {
 
     const RawCompositionLayout raw_layout = readRawLayout(args_.simulation_file);
 
-    // Prepare unique output directory
     const std::filesystem::path output_dir =
         createUniqueOutputDir(args_.mission_control_folder, "comparative_results");
     if (output_dir.empty()) {
@@ -405,7 +414,6 @@ bool SimulationEngine::runComparative() {
     // ── Pre-load all .so files on the main thread ──────────────────────────
     std::vector<std::string> error_managers;
 
-    // Pre-load Algorithm .so
     auto algo_loader = preloadLibrary(args_.algorithm_file, output_dir);
     if (!algo_loader) {
         std::cerr << "Error: Failed to load algorithm .so.\n";
@@ -416,9 +424,8 @@ bool SimulationEngine::runComparative() {
         std::cerr << "Error: Algorithm .so did not register a factory.\n";
         return false;
     }
-    const common::MappingAlgorithmFactory algo_factory = *algo_factory_opt;
+    common::MappingAlgorithmFactory algo_factory = *algo_factory_opt;
 
-    // Pre-load all MissionControl .so files
     struct PreloadedMC {
         std::string so_name;
         std::unique_ptr<DlLoader> loader;
@@ -463,7 +470,6 @@ bool SimulationEngine::runComparative() {
         }
     }
 
-    // 2D results table: [mc_index][spec_index]
     std::vector<std::vector<SingleRunResult>> all_results(
         preloaded_mcs.size(), std::vector<SingleRunResult>(run_specs.size()));
 
@@ -491,8 +497,8 @@ bool SimulationEngine::runComparative() {
         }
     };
 
-    // ── Launch worker threads ───────────────────────────────────────────────
-    if (args_.num_threads <= 1) {
+    // ── Launch worker threads (Total threads is NEVER 2) ───────────────────
+    if (args_.num_threads <= 1 || jobs.size() < 2) {
         worker();
     } else {
         const std::size_t thread_count = std::min(args_.num_threads, jobs.size());
@@ -536,11 +542,14 @@ bool SimulationEngine::runComparative() {
             mgr.individual_runs);
     }
 
-    // Clean up all factories and objects BEFORE unloading .so libraries
+    // ── Strict Lifetime Cleanup: Reset all factory references BEFORE dlclose
     for (auto& mc : preloaded_mcs) {
         mc.factory = nullptr;
     }
     preloaded_mcs.clear();
+
+    algo_factory = nullptr;
+    algo_factory_opt.reset();
     algo_loader.reset();
 
     std::cout << "[Simulator] Comparative run done -> " << output_dir.string() << "\n";
@@ -623,7 +632,6 @@ bool SimulationEngine::runCompetitive() {
     // ── Pre-load all .so files on the main thread ──────────────────────────
     std::vector<std::string> error_algorithms;
 
-    // Pre-load MissionControl .so
     auto mc_loader = preloadLibrary(args_.mission_control_file, output_dir);
     if (!mc_loader) {
         std::cerr << "Error: Failed to load mission control .so.\n";
@@ -634,9 +642,8 @@ bool SimulationEngine::runCompetitive() {
         std::cerr << "Error: MissionControl .so did not register a factory.\n";
         return false;
     }
-    const common::MissionControlFactory mc_factory = *mc_factory_opt;
+    common::MissionControlFactory mc_factory = *mc_factory_opt;
 
-    // Pre-load all Algorithm .so files
     struct PreloadedAlgo {
         std::string so_name;
         std::unique_ptr<DlLoader> loader;
@@ -681,7 +688,6 @@ bool SimulationEngine::runCompetitive() {
         }
     }
 
-    // 2D results table: [algo_index][spec_index]
     std::vector<std::vector<SingleRunResult>> all_results(
         preloaded_algos.size(), std::vector<SingleRunResult>(run_specs.size()));
 
@@ -709,7 +715,8 @@ bool SimulationEngine::runCompetitive() {
         }
     };
 
-    if (args_.num_threads <= 1) {
+    // ── Launch worker threads (Total threads is NEVER 2) ───────────────────
+    if (args_.num_threads <= 1 || jobs.size() < 2) {
         worker();
     } else {
         const std::size_t thread_count = std::min(args_.num_threads, jobs.size());
@@ -751,10 +758,14 @@ bool SimulationEngine::runCompetitive() {
             algo.individual_runs);
     }
 
+    // ── Strict Lifetime Cleanup: Reset all factory references BEFORE dlclose
     for (auto& algo : preloaded_algos) {
         algo.factory = nullptr;
     }
     preloaded_algos.clear();
+
+    mc_factory = nullptr;
+    mc_factory_opt.reset();
     mc_loader.reset();
 
     std::cout << "[Simulator] Competition done -> " << output_dir.string() << "\n";

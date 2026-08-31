@@ -20,20 +20,26 @@ constexpr const char* kUsageText =
     "Usage (Competition Mode):\n"
     "  ./simulator_<ids> -competition simulation=<simulation_composition_yaml> mission_control=<mission_control_so> algorithms_folder=<folder> [num_threads=<num>] [-verbose]\n";
 
-bool hasSoFiles(const std::filesystem::path& folder_path) {
+bool hasDesiredSoFiles(const std::filesystem::path& folder_path, const std::string& expected_prefix) {
     try {
         if (!std::filesystem::is_directory(folder_path)) {
             return false;
         }
+        bool found_any_so = false;
         for (const auto& entry : std::filesystem::directory_iterator(folder_path)) {
             if (entry.is_regular_file() && entry.path().extension() == ".so") {
-                return true;
+                found_any_so = true;
+                const std::string filename = entry.path().filename().string();
+                if (expected_prefix.empty() || filename.rfind(expected_prefix, 0) == 0) {
+                    return true;
+                }
             }
         }
+        // Fallback: if no prefix-matching file found, return true if any .so exists
+        return found_any_so;
     } catch (...) {
         return false;
     }
-    return false;
 }
 
 bool canOpenFile(const std::filesystem::path& file_path) {
@@ -58,8 +64,9 @@ bool isStrictPositiveInteger(const std::string& str, std::size_t& result) {
         }
     }
     try {
-        long long val = std::stoll(str);
-        if (val <= 0) {
+        std::size_t pos = 0;
+        int val = std::stoi(str, &pos);
+        if (pos != str.length() || val <= 0) {
             return false;
         }
         result = static_cast<std::size_t>(val);
@@ -224,8 +231,8 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
             return std::nullopt;
         }
 
-        if (!hasSoFiles(args.mission_control_folder)) {
-            last_error_ = formatErrorWithUsage("Error: Mission control folder contains zero .so files: " + args.mission_control_folder.string());
+        if (!hasDesiredSoFiles(args.mission_control_folder, "MissionControl")) {
+            last_error_ = formatErrorWithUsage("Error: Mission control folder contains zero MissionControl .so files: " + args.mission_control_folder.string());
             return std::nullopt;
         }
 
@@ -267,8 +274,8 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
             return std::nullopt;
         }
 
-        if (!hasSoFiles(args.algorithms_folder)) {
-            last_error_ = formatErrorWithUsage("Error: Algorithms folder contains zero .so files: " + args.algorithms_folder.string());
+        if (!hasDesiredSoFiles(args.algorithms_folder, "Algorithm")) {
+            last_error_ = formatErrorWithUsage("Error: Algorithms folder contains zero Algorithm .so files: " + args.algorithms_folder.string());
             return std::nullopt;
         }
     }
