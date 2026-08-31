@@ -154,17 +154,20 @@ void ResultExporter::exportComparativeReport(
     out << "  composition_file: \"" << composition_filename << "\"\n";
     out << "  mission_control_folder: \"" << mc_folder_name << "\"\n";
     out << "  generated_at_utc: \"" << getCurrentUtcTimestamp() << "\"\n";
-    out << "  results_summary:\n";
-
-    for (const auto& group : groups) {
-        out << "    - same_results: [";
-        for (std::size_t i = 0; i < group.agreeing_managers.size(); ++i) {
-            if (i > 0) out << ", ";
-            out << "\"" << group.agreeing_managers[i] << "\"";
+    if (groups.empty()) {
+        out << "  results_summary: []\n";
+    } else {
+        out << "  results_summary:\n";
+        for (const auto& group : groups) {
+            out << "    - same_results: [";
+            for (std::size_t i = 0; i < group.agreeing_managers.size(); ++i) {
+                if (i > 0) out << ", ";
+                out << "\"" << group.agreeing_managers[i] << "\"";
+            }
+            out << "]\n";
+            out << "      total_score: " << group.total_score << "\n";
+            out << "      total_steps: " << group.total_steps << "\n";
         }
-        out << "]\n";
-        out << "      total_score: " << group.total_score << "\n";
-        out << "      total_steps: " << group.total_steps << "\n";
     }
 
     out << "  errors: [";
@@ -202,12 +205,15 @@ void ResultExporter::exportCompetitiveReport(
     out << "  composition_file: \"" << composition_filename << "\"\n";
     out << "  mission_control: \"" << mc_so_name << "\"\n";
     out << "  generated_at_utc: \"" << getCurrentUtcTimestamp() << "\"\n";
-    out << "  results_summary:\n";
-
-    for (const auto& res : sorted_results) {
-        out << "    - algorithm: \"" << res.algorithm_so_name << "\"\n";
-        out << "      total_score: " << res.total_score << "\n";
-        out << "      total_steps: " << res.total_steps << "\n";
+    if (sorted_results.empty()) {
+        out << "  results_summary: []\n";
+    } else {
+        out << "  results_summary:\n";
+        for (const auto& res : sorted_results) {
+            out << "    - algorithm: \"" << res.algorithm_so_name << "\"\n";
+            out << "      total_score: " << res.total_score << "\n";
+            out << "      total_steps: " << res.total_steps << "\n";
+        }
     }
 
     out << "  errors: [";
