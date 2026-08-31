@@ -148,6 +148,7 @@ SingleRunResult executeSingleRun(
     try {
         // --- 1. Load and validate ground truth (hidden) map ---
         auto hidden_map_data = loadNormalizedNpyMap(spec.simulation_config.map_filename);
+        validateInputMapValues(*hidden_map_data, spec.simulation_config.map_filename);
         NpyMapShape hidden_shape = npyMapShape(*hidden_map_data, spec.simulation_config.map_filename);
 
         // Derive hidden map physical boundaries from NPY array dimensions (covers full building)

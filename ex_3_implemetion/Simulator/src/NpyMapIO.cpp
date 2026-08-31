@@ -117,14 +117,13 @@ std::shared_ptr<NpyArray3D> loadNormalizedNpyMap(const std::filesystem::path& fi
         throw std::runtime_error("Unsupported NPY dtype: " + header.descr);
     }
 
-    validateInputMapValues(*result, file_path);
     return result;
 }
 
 void validateInputMapValues(const NpyArray3D& array, const std::filesystem::path& file_path) {
     for (int val : array.data) {
         if (val < 0) {
-            throw std::runtime_error("Invalid negative voxel value " + std::to_string(val) + " in map: " + file_path.string());
+            throw std::runtime_error("Invalid negative voxel value " + std::to_string(val) + " in ground-truth map: " + file_path.string());
         }
     }
 }
