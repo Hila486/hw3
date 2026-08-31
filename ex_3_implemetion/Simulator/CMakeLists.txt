@@ -66,25 +66,29 @@ else()
 endif()
 
 # Standalone maps_comparison executable (inherited from HW2)
-add_executable(maps_comparison_207610130_215664087
+add_executable(maps_comparison
     src/maps_comparison_main.cpp
     src/Map3DImpl.cpp
     src/MapsComparison.cpp
     src/NpyMapIO.cpp
 )
 
-target_include_directories(maps_comparison_207610130_215664087 PRIVATE
+set_target_properties(maps_comparison PROPERTIES
+    OUTPUT_NAME "maps_comparison"
+)
+
+target_include_directories(maps_comparison PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/common_simulator/include
 )
 
-target_link_libraries(maps_comparison_207610130_215664087 PRIVATE
+target_link_libraries(maps_comparison PRIVATE
     common::common
     yaml-cpp
 )
 
 if(COMMAND drone_warnings)
-    drone_warnings(maps_comparison_207610130_215664087)
+    drone_warnings(maps_comparison)
 else()
-    target_compile_options(maps_comparison_207610130_215664087 PRIVATE -Wall -Wextra -Werror -pedantic)
+    target_compile_options(maps_comparison PRIVATE -Wall -Wextra -Werror -pedantic)
 endif()

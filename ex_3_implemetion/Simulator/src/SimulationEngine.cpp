@@ -15,6 +15,7 @@
 #include <atomic>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -186,9 +187,12 @@ SingleRunResult executeSingleRun(
                 "[Run " + std::to_string(spec.run_index) +
                 "] output_mapping_resolution_factor < 1 (" + std::to_string(factor) +
                 ") is ignored. Using GPS resolution.");
-        } else {
+        } else if (std::abs(factor - 1.0) < 1.0e-9) {
             result.resolution_request_status = "ACCEPTED";
-            output_resolution = spec.mission_config.gps_resolution * factor;
+            output_resolution = spec.mission_config.gps_resolution;
+        } else {
+            result.resolution_request_status = "IGNORED";
+            output_resolution = spec.mission_config.gps_resolution;
         }
         result.resolution_cm = output_resolution.force_numerical_value_in(cm);
 
@@ -324,6 +328,9 @@ std::filesystem::path createUniqueOutputDir(
                   << output_dir.string() << " (" << ec.message() << ")\n";
         return {};
     }
+    {
+        std::ofstream init_log(output_dir / "error_log.txt");
+    }
     return output_dir;
 }
 
@@ -453,6 +460,11 @@ bool SimulationEngine::runComparative() {
 
     if (preloaded_mcs.empty()) {
         std::cerr << "Error: No MissionControl .so files could be loaded.\n";
+        ResultExporter::exportComparativeReport(
+            output_dir,
+            args_.simulation_file.filename().string(),
+            args_.mission_control_folder.filename().string(),
+            {}, error_managers);
         return false;
     }
 
@@ -521,9 +533,7 @@ bool SimulationEngine::runComparative() {
         mgr_result.individual_runs = std::move(all_results[m]);
 
         for (const auto& run : mgr_result.individual_runs) {
-            if (run.score >= 0.0) {
-                mgr_result.total_score += run.score;
-            }
+            mgr_result.total_score += run.score;
             mgr_result.total_steps += run.steps;
         }
         manager_results.push_back(std::move(mgr_result));
@@ -671,6 +681,11 @@ bool SimulationEngine::runCompetitive() {
 
     if (preloaded_algos.empty()) {
         std::cerr << "Error: No Algorithm .so files could be loaded.\n";
+        ResultExporter::exportCompetitiveReport(
+            output_dir,
+            args_.simulation_file.filename().string(),
+            args_.mission_control_file.filename().string(),
+            {}, error_algorithms);
         return false;
     }
 
@@ -738,9 +753,7 @@ bool SimulationEngine::runCompetitive() {
         algo_result.individual_runs = std::move(all_results[a]);
 
         for (const auto& run : algo_result.individual_runs) {
-            if (run.score >= 0.0) {
-                algo_result.total_score += run.score;
-            }
+            algo_result.total_score += run.score;
             algo_result.total_steps += run.steps;
         }
         algo_results.push_back(std::move(algo_result));
