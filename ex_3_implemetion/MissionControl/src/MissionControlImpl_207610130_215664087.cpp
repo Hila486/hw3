@@ -9,8 +9,10 @@
 #include <utility>
 #include <vector>
 
+using mission_control_207610130_215664087::MissionControlImpl_207610130_215664087;
+
 // Global auto-registration macro call so that dlopen loads this factory automatically.
-REGISTER_MISSION_CONTROL(mission_control_207610130_215664087::MissionControlImpl_207610130_215664087);
+REGISTER_MISSION_CONTROL(MissionControlImpl_207610130_215664087);
 
 namespace mission_control_207610130_215664087 {
 

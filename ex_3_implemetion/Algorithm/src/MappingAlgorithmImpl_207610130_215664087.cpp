@@ -8,8 +8,10 @@
 #include <cmath>
 #include <optional>
 
+using algorithm_207610130_215664087::MappingAlgorithmImpl_207610130_215664087;
+
 // Global auto-registration macro call so that dlopen loads this factory automatically.
-REGISTER_MAPPING_ALGORITHM(algorithm_207610130_215664087::MappingAlgorithmImpl_207610130_215664087);
+REGISTER_MAPPING_ALGORITHM(MappingAlgorithmImpl_207610130_215664087);
 
 namespace algorithm_207610130_215664087 {
 
