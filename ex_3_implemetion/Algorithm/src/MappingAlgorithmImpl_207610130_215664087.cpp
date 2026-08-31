@@ -75,6 +75,12 @@ constexpr std::size_t kMaxFailedTranslations = 20000;
     return angle > 0.0 * horizontal_angle[deg];
 }
 
+[[nodiscard]] bool isBlockedOccupancy(common::types::VoxelOccupancy occupancy) {
+    return occupancy == common::types::VoxelOccupancy::Occupied ||
+           occupancy == common::types::VoxelOccupancy::OutOfBounds ||
+           occupancy == common::types::VoxelOccupancy::PotentiallyOccupied;
+}
+
 [[nodiscard]] Position3D offsetHorizontal(
     const Position3D& position,
     double heading_degrees,
@@ -106,12 +112,6 @@ constexpr std::size_t kMaxFailedTranslations = 20000;
     command.movement = movement;
     command.status = common::types::AlgorithmStatus::Working;
     return command;
-}
-
-[[nodiscard]] bool isBlockedOccupancy(common::types::VoxelOccupancy occupancy) {
-    return occupancy == common::types::VoxelOccupancy::Occupied ||
-           occupancy == common::types::VoxelOccupancy::OutOfBounds ||
-           occupancy == common::types::VoxelOccupancy::PotentiallyOccupied;
 }
 
 } // namespace

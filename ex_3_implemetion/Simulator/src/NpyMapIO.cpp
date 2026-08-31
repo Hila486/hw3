@@ -123,8 +123,8 @@ std::shared_ptr<NpyArray3D> loadNormalizedNpyMap(const std::filesystem::path& fi
 
 void validateInputMapValues(const NpyArray3D& array, const std::filesystem::path& file_path) {
     for (int val : array.data) {
-        if (val != 0 && val != 1 && val != 2) {
-            throw std::runtime_error("Invalid voxel value " + std::to_string(val) + " in map: " + file_path.string());
+        if (val < 0) {
+            throw std::runtime_error("Invalid negative voxel value " + std::to_string(val) + " in map: " + file_path.string());
         }
     }
 }

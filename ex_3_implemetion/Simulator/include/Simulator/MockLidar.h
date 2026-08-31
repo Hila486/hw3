@@ -17,9 +17,13 @@ public:
         const MockGPS& gps);
 
     [[nodiscard]] common::types::LidarScanResult scan(
-        const Orientation& scan_orientation) override;
+        Orientation scan_orientation) const override;
+
+    [[nodiscard]] common::types::LidarConfigData config() const override;
 
 private:
+    [[nodiscard]] PhysicalLength traceBeam(const Orientation& beam_orientation) const;
+
     common::types::LidarConfigData lidar_config_;
     const common::IMap3D& hidden_map_;
     const MockGPS& gps_;

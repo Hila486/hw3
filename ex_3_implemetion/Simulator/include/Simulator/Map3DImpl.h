@@ -7,7 +7,6 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
-#include <tuple>
 
 namespace simulator_207610130_215664087 {
 
@@ -19,15 +18,16 @@ public:
 
     [[nodiscard]] common::types::VoxelOccupancy atVoxel(const Position3D& position) const override;
     [[nodiscard]] common::types::MapConfig getMapConfig() const override;
-    void setVoxel(const Position3D& position, common::types::VoxelOccupancy value) override;
+    [[nodiscard]] bool isInBounds(const Position3D& position) const override;
+
+    void set(const Position3D& position, common::types::VoxelOccupancy value) override;
     void save(const std::filesystem::path& file_path) const override;
 
     [[nodiscard]] std::shared_ptr<const NpyArray3D> rawData() const;
     [[nodiscard]] std::shared_ptr<NpyArray3D> rawData();
 
 private:
-    [[nodiscard]] std::optional<std::tuple<std::size_t, std::size_t, std::size_t>>
-    worldToGrid(const Position3D& position) const;
+    [[nodiscard]] bool positionToFlatIndex(const Position3D& pos, std::size_t& flat_idx) const;
 
     std::shared_ptr<NpyArray3D> data_;
     common::types::MapConfig config_;

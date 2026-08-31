@@ -1,19 +1,3 @@
-/**
- * @file SimulationEngine.cpp
- * @brief Multi-threaded simulation orchestrator for Comparative and Competitive runs.
- *
- * Key design decisions:
- * - Module architecture matches Structuring the project.pdf: all simulation mocks,
- *   hidden map processing, and result evaluation live inside the Simulator module.
- * - Hidden map boundaries derived from NPY dimensions * resolution - offset (covering full building).
- * - Output map boundaries configured to mission_bounds.
- * - MockMovement performs swept volume trajectory collision checks using drone radius.
- * - Resolution factor calculation based on mission_config.gps_resolution.
- * - Thread count compliance: total running threads is NEVER 2.
- * - Strict lifetime cleanup: all instantiated objects and stack factory references are
- *   destroyed/reset before dlclose() is invoked.
- */
-
 #include <Simulator/SimulationEngine.h>
 #include <Simulator/DlLoader.h>
 #include <Simulator/ResultExporter.h>
@@ -176,9 +160,12 @@ SingleRunResult executeSingleRun(
         const double offset_z = spec.simulation_config.map_axes_offset.z.force_numerical_value_in(cm);
 
         common::types::MappingBounds full_map_bounds{
-            Interval{-offset_x * x_extent[cm], (full_width_cm - offset_x) * x_extent[cm]},
-            Interval{-offset_y * y_extent[cm], (full_length_cm - offset_y) * y_extent[cm]},
-            Interval{-offset_z * z_extent[cm], (full_height_cm - offset_z) * z_extent[cm]}
+            -offset_x * x_extent[cm],
+            (full_width_cm - offset_x) * x_extent[cm],
+            -offset_y * y_extent[cm],
+            (full_length_cm - offset_y) * y_extent[cm],
+            -offset_z * z_extent[cm],
+            (full_height_cm - offset_z) * z_extent[cm]
         };
         common::types::MapConfig hidden_map_config{
             full_map_bounds,
@@ -207,12 +194,12 @@ SingleRunResult executeSingleRun(
 
         // Derive output map voxel grid dimensions from mission_bounds and output_resolution
         const double out_res_cm = result.resolution_cm > 0.0 ? result.resolution_cm : 10.0;
-        const double mb_x_len = spec.mission_config.mission_bounds.x.max.force_numerical_value_in(cm) -
-                                spec.mission_config.mission_bounds.x.min.force_numerical_value_in(cm);
-        const double mb_y_len = spec.mission_config.mission_bounds.y.max.force_numerical_value_in(cm) -
-                                spec.mission_config.mission_bounds.y.min.force_numerical_value_in(cm);
-        const double mb_z_len = spec.mission_config.mission_bounds.z.max.force_numerical_value_in(cm) -
-                                spec.mission_config.mission_bounds.z.min.force_numerical_value_in(cm);
+        const double mb_x_len = spec.mission_config.mission_bounds.max_x.force_numerical_value_in(cm) -
+                                spec.mission_config.mission_bounds.min_x.force_numerical_value_in(cm);
+        const double mb_y_len = spec.mission_config.mission_bounds.max_y.force_numerical_value_in(cm) -
+                                spec.mission_config.mission_bounds.min_y.force_numerical_value_in(cm);
+        const double mb_z_len = spec.mission_config.mission_bounds.max_height.force_numerical_value_in(cm) -
+                                spec.mission_config.mission_bounds.min_height.force_numerical_value_in(cm);
 
         NpyMapShape output_shape{
             static_cast<std::size_t>(std::max(1.0, std::ceil(mb_x_len / out_res_cm))),
@@ -389,9 +376,8 @@ bool SimulationEngine::runComparative() {
         return false;
     }
 
-    // Build Cartesian product of (simulation × mission × drone × lidar) specs
     std::vector<SingleRunSpec> run_specs;
-    std::size_t run_idx = 0;
+    std::size_t current_run_idx = 0;
 
     for (std::size_t s = 0; s < composition.simulation_mission_groups.size(); ++s) {
         const auto& group = composition.simulation_mission_groups[s];
@@ -424,7 +410,7 @@ bool SimulationEngine::runComparative() {
                     run_specs.push_back(SingleRunSpec{
                         sim_config, mission_config, drone_config, lidar_config,
                         sim_name, mission_name, drone_name, lidar_name,
-                        ++run_idx
+                        ++current_run_idx
                     });
                 }
             }
@@ -612,7 +598,7 @@ bool SimulationEngine::runCompetitive() {
     }
 
     std::vector<SingleRunSpec> run_specs;
-    std::size_t run_idx = 0;
+    std::size_t current_run_idx = 0;
 
     for (std::size_t s = 0; s < composition.simulation_mission_groups.size(); ++s) {
         const auto& group = composition.simulation_mission_groups[s];
@@ -645,7 +631,7 @@ bool SimulationEngine::runCompetitive() {
                     run_specs.push_back(SingleRunSpec{
                         sim_config, mission_config, drone_config, lidar_config,
                         sim_name, mission_name, drone_name, lidar_name,
-                        ++run_idx
+                        ++current_run_idx
                     });
                 }
             }

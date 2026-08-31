@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Common/IMappingAlgorithm.h>
+#include <Common/Types.h>
 
 #include <cstddef>
 #include <optional>
@@ -8,6 +9,8 @@
 #include <vector>
 
 namespace algorithm_207610130_215664087 {
+
+using namespace common;
 
 /**
  * @class MappingAlgorithmImpl_207610130_215664087

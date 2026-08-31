@@ -9,49 +9,57 @@
 #include <MissionControl/IDroneControl.h>
 
 #include <memory>
-#include <vector>
+#include <optional>
+#include <string>
 
 namespace mission_control_207610130_215664087 {
 
 using namespace common;
 
-/**
- * @class DroneControlImpl
- * @brief Concrete implementation of IDroneControl for MissionControl.
- */
 class DroneControlImpl final : public mission_control::IDroneControl {
 public:
     DroneControlImpl(
-        const common::types::DroneConfigData& drone_config,
-        const common::types::MissionConfigData& mission_config,
-        common::ILidar& lidar,
-        common::IGPS& gps,
-        common::IDroneMovement& movement,
-        common::IMutableMap3D& map,
-        common::IMappingAlgorithm& algorithm);
+        types::DroneConfigData drone,
+        types::MissionConfigData mission,
+        ILidar& lidar,
+        IGPS& gps,
+        IDroneMovement& movement,
+        IMutableMap3D& output_map,
+        IMappingAlgorithm& mapping_algorithm);
 
-    [[nodiscard]] common::types::DroneStepResult step() override;
+    [[nodiscard]] types::DroneStepResult step() override;
+    [[nodiscard]] types::DroneState state() const;
 
 private:
-    [[nodiscard]] bool validateAdvance(PhysicalLength distance, std::string& error_message) const;
-    [[nodiscard]] bool validateElevate(PhysicalLength distance, std::string& error_message) const;
-    [[nodiscard]] bool validateRotate(HorizontalAngle angle, std::string& error_message) const;
-    [[nodiscard]] bool validateScan(const Orientation& orientation, std::string& error_message) const;
+    [[nodiscard]] bool executeMovementCommand(
+        const types::MovementCommand& command,
+        std::string& message);
 
-    void updateMapWithScan(const common::types::LidarScanResult& scan,
-                           const Position3D& drone_pos,
-                           const Orientation& drone_orient);
+    [[nodiscard]] bool isMovementCommandWithinLimits(
+        const types::MovementCommand& command,
+        std::string& message) const;
 
-    common::types::DroneConfigData drone_config_;
-    common::types::MissionConfigData mission_config_;
-    common::ILidar& lidar_;
-    common::IGPS& gps_;
-    common::IDroneMovement& movement_;
-    common::IMutableMap3D& map_;
-    common::IMappingAlgorithm& algorithm_;
+    [[nodiscard]] Position3D targetPositionForMovement(
+        const Position3D& start,
+        const Orientation& heading,
+        const types::MovementCommand& command) const;
 
-    std::size_t step_count_ = 0;
-    std::unique_ptr<common::types::LidarScanResult> latest_scan_result_{nullptr};
+    [[nodiscard]] bool isSweptSphereKnownEmpty(
+        const Position3D& start,
+        const Position3D& target) const;
+
+    void markCurrentDroneBodyAsEmpty();
+
+    types::DroneConfigData drone_;
+    types::MissionConfigData mission_;
+    ILidar& lidar_;
+    IGPS& gps_;
+    IDroneMovement& movement_;
+    IMutableMap3D& output_map_;
+    IMappingAlgorithm& mapping_algorithm_;
+
+    std::size_t step_index_ = 0;
+    std::optional<types::LidarScanResult> latest_scan_{std::nullopt};
 };
 
 } // namespace mission_control_207610130_215664087

@@ -1,248 +1,326 @@
 #include <MissionControl/DroneControlImpl.h>
 #include <MissionControl/ScanResultToVoxels.h>
 
+#include <algorithm>
 #include <cmath>
-#include <mp-units/systems/si/math.h>
-#include <sstream>
+#include <exception>
+#include <string>
 #include <utility>
 
 namespace mission_control_207610130_215664087 {
 
 namespace {
 
-constexpr double kTrigEpsilon = 1.0e-9;
+constexpr double kPi = 3.14159265358979323846;
+constexpr double kMinimumPositiveStepCm = 1.0e-6;
+constexpr double kFallbackSafetyStepCm = 1.0;
+
+[[nodiscard]] double physicalCm(PhysicalLength length) {
+    return length.force_numerical_value_in(cm);
+}
+
+[[nodiscard]] double xCm(XLength length) {
+    return length.force_numerical_value_in(cm);
+}
+
+[[nodiscard]] double yCm(YLength length) {
+    return length.force_numerical_value_in(cm);
+}
+
+[[nodiscard]] double zCm(ZLength length) {
+    return length.force_numerical_value_in(cm);
+}
 
 [[nodiscard]] double horizontalDegrees(HorizontalAngle angle) {
     return angle.force_numerical_value_in(deg);
 }
 
-[[nodiscard]] double altitudeDegrees(AltitudeAngle angle) {
-    return angle.force_numerical_value_in(deg);
+[[nodiscard]] double degreesToRadians(double degrees) {
+    return degrees * kPi / 180.0;
 }
 
-[[nodiscard]] double snapped(double value) {
-    return std::abs(value) < kTrigEpsilon ? 0.0 : value;
+[[nodiscard]] double squaredDistanceCm(const Position3D& a, const Position3D& b) {
+    const double dx_cm = xCm(a.x) - xCm(b.x);
+    const double dy_cm = yCm(a.y) - yCm(b.y);
+    const double dz_cm = zCm(a.z) - zCm(b.z);
+    return dx_cm * dx_cm + dy_cm * dy_cm + dz_cm * dz_cm;
+}
+
+[[nodiscard]] bool isInsideSphere(const Position3D& position,
+                                  const Position3D& center,
+                                  double radius_cm) {
+    return squaredDistanceCm(position, center) <= radius_cm * radius_cm;
+}
+
+[[nodiscard]] types::DroneStepResult continueResult(std::string message = {}) {
+    return types::DroneStepResult{types::DroneStepStatus::Continue, std::move(message)};
+}
+
+[[nodiscard]] types::DroneStepResult completedResult(std::string message = {}) {
+    return types::DroneStepResult{types::DroneStepStatus::Completed, std::move(message)};
+}
+
+[[nodiscard]] types::DroneStepResult errorResult(std::string message) {
+    return types::DroneStepResult{types::DroneStepStatus::Error, std::move(message)};
 }
 
 } // namespace
 
-DroneControlImpl::DroneControlImpl(
-    const common::types::DroneConfigData& drone_config,
-    const common::types::MissionConfigData& mission_config,
-    common::ILidar& lidar,
-    common::IGPS& gps,
-    common::IDroneMovement& movement,
-    common::IMutableMap3D& map,
-    common::IMappingAlgorithm& algorithm)
-    : drone_config_(drone_config),
-      mission_config_(mission_config),
+DroneControlImpl::DroneControlImpl(types::DroneConfigData drone,
+                                   types::MissionConfigData mission,
+                                   ILidar& lidar,
+                                   IGPS& gps,
+                                   IDroneMovement& movement,
+                                   IMutableMap3D& output_map,
+                                   IMappingAlgorithm& mapping_algorithm)
+    : drone_(std::move(drone)),
+      mission_(std::move(mission)),
       lidar_(lidar),
       gps_(gps),
       movement_(movement),
-      map_(map),
-      algorithm_(algorithm) {}
+      output_map_(output_map),
+      mapping_algorithm_(mapping_algorithm) {}
 
-bool DroneControlImpl::validateAdvance(PhysicalLength distance, std::string& error_message) const {
-    const double distance_cm = distance.force_numerical_value_in(cm);
-    const double max_advance_cm = drone_config_.max_horizontal_speed.force_numerical_value_in(cm);
-
-    if (std::abs(distance_cm) > max_advance_cm) {
-        std::ostringstream ss;
-        ss << "Advance distance " << distance_cm << " exceeds max speed " << max_advance_cm;
-        error_message = ss.str();
-        return false;
-    }
-    return true;
-}
-
-bool DroneControlImpl::validateElevate(PhysicalLength distance, std::string& error_message) const {
-    const double distance_cm = distance.force_numerical_value_in(cm);
-    const double max_elevate_cm = drone_config_.max_vertical_speed.force_numerical_value_in(cm);
-
-    if (std::abs(distance_cm) > max_elevate_cm) {
-        std::ostringstream ss;
-        ss << "Elevate distance " << distance_cm << " exceeds max vertical speed " << max_elevate_cm;
-        error_message = ss.str();
-        return false;
-    }
-    return true;
-}
-
-bool DroneControlImpl::validateRotate(HorizontalAngle angle, std::string& error_message) const {
-    const double angle_deg = horizontalDegrees(angle);
-    const double max_rotate_deg = horizontalDegrees(drone_config_.max_rotation_speed);
-
-    if (angle_deg < 0.0 || angle_deg > max_rotate_deg) {
-        std::ostringstream ss;
-        ss << "Rotate angle " << angle_deg << " is invalid or exceeds max rotation " << max_rotate_deg;
-        error_message = ss.str();
-        return false;
-    }
-    return true;
-}
-
-bool DroneControlImpl::validateScan(const Orientation& orientation, std::string& error_message) const {
-    const double horiz_deg = horizontalDegrees(orientation.horizontal);
-    const double alt_deg = altitudeDegrees(orientation.altitude);
-
-    if (horiz_deg < 0.0 || horiz_deg >= 360.0) {
-        error_message = "Scan horizontal angle must be in [0, 360).";
-        return false;
-    }
-    if (alt_deg < -90.0 || alt_deg > 90.0) {
-        error_message = "Scan altitude angle must be in [-90, 90].";
-        return false;
-    }
-    return true;
-}
-
-void DroneControlImpl::updateMapWithScan(
-    const common::types::LidarScanResult& scan,
-    const Position3D& drone_pos,
-    const Orientation& drone_orient) {
-
-    // First mark ray paths as empty
-    const PhysicalLength resolution = map_.getMapConfig().resolution;
-    const double step_size_cm = std::max(0.5, resolution.force_numerical_value_in(cm) * 0.5);
-
-    for (const auto& hit : scan.hits) {
-        const double distance_cm = hit.distance.force_numerical_value_in(cm);
-        const HorizontalAngle total_azimuth = drone_orient.horizontal + hit.relative_azimuth;
-        const AltitudeAngle total_elevation = drone_orient.altitude + hit.relative_elevation;
-
-        const double cos_elev = snapped(si::cos(total_elevation).force_numerical_value_in(mp::one));
-        const double sin_elev = snapped(si::sin(total_elevation).force_numerical_value_in(mp::one));
-        const double cos_azim = snapped(si::cos(total_azimuth).force_numerical_value_in(mp::one));
-        const double sin_azim = snapped(si::sin(total_azimuth).force_numerical_value_in(mp::one));
-
-        const double dx_unit = cos_elev * cos_azim;
-        const double dy_unit = cos_elev * sin_azim;
-        const double dz_unit = sin_elev;
-
-        // Trace empty voxels up to hit distance minus small buffer
-        const double trace_limit_cm = std::max(0.0, distance_cm - step_size_cm);
-        const std::size_t num_samples = static_cast<std::size_t>(std::ceil(trace_limit_cm / step_size_cm));
-
-        for (std::size_t s = 1; s <= num_samples; ++s) {
-            const double cur_dist_cm = std::min(trace_limit_cm, s * step_size_cm);
-            Position3D empty_pos{
-                drone_pos.x + cur_dist_cm * dx_unit * x_extent[cm],
-                drone_pos.y + cur_dist_cm * dy_unit * y_extent[cm],
-                drone_pos.z + cur_dist_cm * dz_unit * z_extent[cm],
-            };
-            if (map_.atVoxel(empty_pos) == common::types::VoxelOccupancy::Unmapped) {
-                map_.setVoxel(empty_pos, common::types::VoxelOccupancy::Empty);
-            }
-        }
-    }
-
-    // Now mark occupied hit voxels
-    const auto hit_voxels = scanResultToHitVoxels(scan, drone_pos, drone_orient, resolution);
-    for (const auto& hit_pos : hit_voxels) {
-        map_.setVoxel(hit_pos, common::types::VoxelOccupancy::Occupied);
-    }
-}
-
-common::types::DroneStepResult DroneControlImpl::step() {
-    ++step_count_;
-
-    const Position3D current_pos = gps_.position();
-    const Orientation current_orient = gps_.heading();
-
-    common::types::DroneState drone_state{
-        current_pos,
-        current_orient,
-        step_count_
-    };
-
-    common::types::MappingStepCommand command;
+types::DroneStepResult DroneControlImpl::step() {
     try {
-        command = algorithm_.nextStep(drone_state, latest_scan_result_.get());
-    } catch (const std::exception& ex) {
-        return common::types::DroneStepResult{
-            common::types::DroneStepStatus::Error,
-            std::string("Algorithm threw exception in nextStep: ") + ex.what()
-        };
-    } catch (...) {
-        return common::types::DroneStepResult{
-            common::types::DroneStepStatus::Error,
-            "Algorithm threw unknown exception in nextStep."
-        };
+        markCurrentDroneBodyAsEmpty();
+
+        const types::LidarScanResult* latest_scan =
+            latest_scan_ ? &(*latest_scan_) : nullptr;
+        const types::MappingStepCommand command =
+            mapping_algorithm_.nextStep(state(), latest_scan);
+
+        latest_scan_.reset();
+
+        if (command.status == types::AlgorithmStatus::Finished) {
+            return completedResult("Mapping algorithm finished.");
+        }
+        if (command.status == types::AlgorithmStatus::FinishedWithUnmappableVoxels) {
+            return completedResult("Mapping algorithm finished with unmappable voxels.");
+        }
+
+        if (command.movement) {
+            std::string movement_message;
+            if (!executeMovementCommand(*command.movement, movement_message)) {
+                ++step_index_;
+                return continueResult(std::move(movement_message));
+            }
+        }
+
+        if (command.scan_orientation) {
+            latest_scan_ = lidar_.scan(*command.scan_orientation);
+            ScanResultToVoxels::applyToMap(
+                output_map_,
+                gps_.position(),
+                gps_.heading(),
+                *latest_scan_,
+                lidar_.config());
+        }
+
+        ++step_index_;
+        return continueResult();
+    } catch (const std::exception& exception) {
+        return errorResult(std::string("DroneControlImpl::step failed: ") + exception.what());
+    }
+}
+
+types::DroneState DroneControlImpl::state() const {
+    return types::DroneState{gps_.position(), gps_.heading(), step_index_};
+}
+
+bool DroneControlImpl::executeMovementCommand(const types::MovementCommand& command,
+                                              std::string& message) {
+    if (command.type == types::MovementCommandType::Hover) {
+        return true;
     }
 
-    // Clear previous scan result pointer after supplying it to nextStep
-    latest_scan_result_.reset();
+    if (!isMovementCommandWithinLimits(command, message)) {
+        return false;
+    }
 
-    switch (command.action) {
-        case common::types::StepAction::Scan: {
-            std::string err;
-            if (!validateScan(command.scan_orientation, err)) {
-                return common::types::DroneStepResult{common::types::DroneStepStatus::Error, err};
+    const Position3D start = gps_.position();
+    const Orientation heading = gps_.heading();
+    const Position3D target = targetPositionForMovement(start, heading, command);
+
+    if (command.type != types::MovementCommandType::Rotate &&
+        !isSweptSphereKnownEmpty(start, target)) {
+        message = "Movement rejected: swept drone volume is not fully known empty.";
+        return false;
+    }
+
+    types::MovementResult result;
+    switch (command.type) {
+        case types::MovementCommandType::Rotate:
+            result = movement_.rotate(command.rotation, command.angle);
+            break;
+        case types::MovementCommandType::Advance:
+            result = movement_.advance(command.distance);
+            break;
+        case types::MovementCommandType::Elevate:
+            result = movement_.elevate(command.distance);
+            break;
+        case types::MovementCommandType::Hover:
+            return true;
+    }
+
+    if (!result) {
+        message = result.message.empty() ? "Movement command failed." : result.message;
+        return false;
+    }
+
+    return true;
+}
+
+bool DroneControlImpl::isMovementCommandWithinLimits(
+    const types::MovementCommand& command,
+    std::string& message) const {
+    switch (command.type) {
+        case types::MovementCommandType::Hover:
+            return true;
+        case types::MovementCommandType::Rotate: {
+            const double angle_degrees = std::abs(horizontalDegrees(command.angle));
+            const double max_degrees = horizontalDegrees(drone_.max_rotate);
+            if (angle_degrees > max_degrees) {
+                message = "Movement rejected: rotate command exceeds max_rotate.";
+                return false;
             }
-            try {
-                auto scan_res = lidar_.scan(command.scan_orientation);
-                updateMapWithScan(scan_res, current_pos, current_orient);
-                latest_scan_result_ = std::make_unique<common::types::LidarScanResult>(std::move(scan_res));
-                return common::types::DroneStepResult{common::types::DroneStepStatus::Continue, {}};
-            } catch (const std::exception& ex) {
-                return common::types::DroneStepResult{common::types::DroneStepStatus::Error, ex.what()};
-            }
+            return true;
         }
-
-        case common::types::StepAction::Advance: {
-            std::string err;
-            if (!validateAdvance(command.distance, err)) {
-                return common::types::DroneStepResult{common::types::DroneStepStatus::Error, err};
+        case types::MovementCommandType::Advance: {
+            const double distance_cm = physicalCm(command.distance);
+            if (std::abs(distance_cm) > physicalCm(drone_.max_advance)) {
+                message = "Movement rejected: advance command exceeds max_advance.";
+                return false;
             }
-            try {
-                auto move_res = movement_.advance(command.distance);
-                if (!move_res.success) {
-                    return common::types::DroneStepResult{common::types::DroneStepStatus::Error, "Advance movement failed."};
-                }
-                return common::types::DroneStepResult{common::types::DroneStepStatus::Continue, {}};
-            } catch (const std::exception& ex) {
-                return common::types::DroneStepResult{common::types::DroneStepStatus::Error, ex.what()};
-            }
+            return true;
         }
-
-        case common::types::StepAction::Elevate: {
-            std::string err;
-            if (!validateElevate(command.distance, err)) {
-                return common::types::DroneStepResult{common::types::DroneStepStatus::Error, err};
+        case types::MovementCommandType::Elevate: {
+            const double distance_cm = physicalCm(command.distance);
+            if (std::abs(distance_cm) > physicalCm(drone_.max_elevate)) {
+                message = "Movement rejected: elevate command exceeds max_elevate.";
+                return false;
             }
-            try {
-                auto move_res = movement_.elevate(command.distance);
-                if (!move_res.success) {
-                    return common::types::DroneStepResult{common::types::DroneStepStatus::Error, "Elevate movement failed."};
-                }
-                return common::types::DroneStepResult{common::types::DroneStepStatus::Continue, {}};
-            } catch (const std::exception& ex) {
-                return common::types::DroneStepResult{common::types::DroneStepStatus::Error, ex.what()};
-            }
-        }
-
-        case common::types::StepAction::Rotate: {
-            std::string err;
-            if (!validateRotate(command.angle, err)) {
-                return common::types::DroneStepResult{common::types::DroneStepStatus::Error, err};
-            }
-            try {
-                auto move_res = movement_.rotate(command.rotation_direction, command.angle);
-                if (!move_res.success) {
-                    return common::types::DroneStepResult{common::types::DroneStepStatus::Error, "Rotate movement failed."};
-                }
-                return common::types::DroneStepResult{common::types::DroneStepStatus::Continue, {}};
-            } catch (const std::exception& ex) {
-                return common::types::DroneStepResult{common::types::DroneStepStatus::Error, ex.what()};
-            }
-        }
-
-        case common::types::StepAction::Finish: {
-            return common::types::DroneStepResult{common::types::DroneStepStatus::Completed, {}};
+            return true;
         }
     }
 
-    return common::types::DroneStepResult{common::types::DroneStepStatus::Error, "Unknown command action."};
+    message = "Movement rejected: unsupported movement command type.";
+    return false;
+}
+
+Position3D DroneControlImpl::targetPositionForMovement(
+    const Position3D& start,
+    const Orientation& heading,
+    const types::MovementCommand& command) const {
+    switch (command.type) {
+        case types::MovementCommandType::Hover:
+        case types::MovementCommandType::Rotate:
+            return start;
+        case types::MovementCommandType::Advance: {
+            const double distance_cm = physicalCm(command.distance);
+            const double heading_radians = degreesToRadians(horizontalDegrees(heading.horizontal));
+            const double dx_cm = distance_cm * std::cos(heading_radians);
+            const double dy_cm = distance_cm * std::sin(heading_radians);
+            return Position3D{
+                start.x + dx_cm * x_extent[cm],
+                start.y + dy_cm * y_extent[cm],
+                start.z
+            };
+        }
+        case types::MovementCommandType::Elevate:
+            return Position3D{
+                start.x,
+                start.y,
+                start.z + command.distance.force_numerical_value_in(cm) * z_extent[cm]
+            };
+    }
+
+    return start;
+}
+
+bool DroneControlImpl::isSweptSphereKnownEmpty(const Position3D& start,
+                                              const Position3D& target) const {
+    const double radius_cm = physicalCm(drone_.radius);
+    const double resolution_cm = physicalCm(output_map_.getMapConfig().resolution);
+    const double safety_step_cm =
+        resolution_cm > 0.0 ? std::max(resolution_cm * 0.5, kMinimumPositiveStepCm)
+                            : kFallbackSafetyStepCm;
+
+    const double start_x = xCm(start.x);
+    const double start_y = yCm(start.y);
+    const double start_z = zCm(start.z);
+
+    const double target_x = xCm(target.x);
+    const double target_y = yCm(target.y);
+    const double target_z = zCm(target.z);
+
+    const double dx = target_x - start_x;
+    const double dy = target_y - start_y;
+    const double dz = target_z - start_z;
+    const double total_distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+    const std::size_t sample_count =
+        std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil(total_distance / safety_step_cm)));
+
+    const double sample_radius_step_cm =
+        resolution_cm > 0.0 ? std::max(resolution_cm * 0.5, kMinimumPositiveStepCm)
+                            : kFallbackSafetyStepCm;
+
+    for (std::size_t step = 0; step <= sample_count; ++step) {
+        const double progress = static_cast<double>(step) / static_cast<double>(sample_count);
+        const Position3D center{
+            (start_x + progress * dx) * x_extent[cm],
+            (start_y + progress * dy) * y_extent[cm],
+            (start_z + progress * dz) * z_extent[cm]
+        };
+
+        for (double rx = -radius_cm; rx <= radius_cm; rx += sample_radius_step_cm) {
+            for (double ry = -radius_cm; ry <= radius_cm; ry += sample_radius_step_cm) {
+                for (double rz = -radius_cm; rz <= radius_cm; rz += sample_radius_step_cm) {
+                    const Position3D point{
+                        center.x + rx * x_extent[cm],
+                        center.y + ry * y_extent[cm],
+                        center.z + rz * z_extent[cm]
+                    };
+
+                    if (!isInsideSphere(point, center, radius_cm)) {
+                        continue;
+                    }
+
+                    if (output_map_.atVoxel(point) != types::VoxelOccupancy::Empty) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+void DroneControlImpl::markCurrentDroneBodyAsEmpty() {
+    const Position3D center = gps_.position();
+    const double radius_cm = physicalCm(drone_.radius);
+    const double resolution_cm = physicalCm(output_map_.getMapConfig().resolution);
+    const double step_cm =
+        resolution_cm > 0.0 ? std::max(resolution_cm * 0.5, kMinimumPositiveStepCm)
+                            : kFallbackSafetyStepCm;
+
+    for (double rx = -radius_cm; rx <= radius_cm; rx += step_cm) {
+        for (double ry = -radius_cm; ry <= radius_cm; ry += step_cm) {
+            for (double rz = -radius_cm; rz <= radius_cm; rz += step_cm) {
+                const Position3D point{
+                    center.x + rx * x_extent[cm],
+                    center.y + ry * y_extent[cm],
+                    center.z + rz * z_extent[cm]
+                };
+
+                if (isInsideSphere(point, center, radius_cm)) {
+                    output_map_.set(point, types::VoxelOccupancy::Empty);
+                }
+            }
+        }
+    }
 }
 
 } // namespace mission_control_207610130_215664087

@@ -26,12 +26,12 @@ std::vector<double> MapsComparison::compare(
             continue;
         }
 
-        const double min_x = config.boundaries.x.min.force_numerical_value_in(cm);
-        const double max_x = config.boundaries.x.max.force_numerical_value_in(cm);
-        const double min_y = config.boundaries.y.min.force_numerical_value_in(cm);
-        const double max_y = config.boundaries.y.max.force_numerical_value_in(cm);
-        const double min_z = config.boundaries.z.min.force_numerical_value_in(cm);
-        const double max_z = config.boundaries.z.max.force_numerical_value_in(cm);
+        const double min_x = config.boundaries.min_x.force_numerical_value_in(cm);
+        const double max_x = config.boundaries.max_x.force_numerical_value_in(cm);
+        const double min_y = config.boundaries.min_y.force_numerical_value_in(cm);
+        const double max_y = config.boundaries.max_y.force_numerical_value_in(cm);
+        const double min_z = config.boundaries.min_height.force_numerical_value_in(cm);
+        const double max_z = config.boundaries.max_height.force_numerical_value_in(cm);
 
         std::size_t total_voxels = 0;
         std::size_t matched_voxels = 0;

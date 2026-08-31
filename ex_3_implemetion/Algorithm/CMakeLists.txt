@@ -1,4 +1,20 @@
 cmake_minimum_required(VERSION 3.15)
+
+if(DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
+endif()
+
+if(NOT DEFINED CMAKE_PREFIX_PATH)
+    list(APPEND CMAKE_PREFIX_PATH
+        "${CMAKE_CURRENT_SOURCE_DIR}/../build/default/vcpkg_installed/x64-linux"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../build/default/vcpkg_installed"
+    )
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../vcpkg.json" AND NOT DEFINED VCPKG_MANIFEST_DIR)
+    set(VCPKG_MANIFEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." CACHE PATH "")
+endif()
+
 project(Algorithm LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
