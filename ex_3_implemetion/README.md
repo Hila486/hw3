@@ -19,7 +19,7 @@ The system supports two execution modes:
 ## Project Structure & Namespaces
 
 ```text
-ex_3_skeleton-main/
+ex3_207610130_215664087/
 │
 ├── common/                  <-- Provided course interface headers (unmodified)
 │   └── include/Common/      <-- IMappingAlgorithm.h, IMissionControl.h, etc.
@@ -29,23 +29,23 @@ ex_3_skeleton-main/
 │   └── src/                 <-- Component source implementations
 │
 ├── Algorithm/               <-- Mapping Algorithm Shared Library Target
-│   ├── CMakeLists.txt       <-- Builds Algorithm_207610130_215664087.so
+│   ├── CMakeLists.txt       <-- Builds Algorithm_207610130_215664087.so (independent build)
 │   ├── include/Algorithm/   <-- MappingAlgorithmImpl_207610130_215664087.h (namespace algorithm_207610130_215664087)
 │   └── src/                 <-- MappingAlgorithmImpl_207610130_215664087.cpp + REGISTER_MAPPING_ALGORITHM(...)
 │
 ├── MissionControl/          <-- Mission Control Shared Library Target
-│   ├── CMakeLists.txt       <-- Builds MissionControl_207610130_215664087.so
+│   ├── CMakeLists.txt       <-- Builds MissionControl_207610130_215664087.so (independent build)
 │   ├── include/MissionControl/ <-- MissionControlImpl_207610130_215664087.h (namespace mission_control_207610130_215664087)
 │   └── src/                 <-- MissionControlImpl_207610130_215664087.cpp + REGISTER_MISSION_CONTROL(...)
 │
 ├── Simulator/               <-- Executable Simulation Project Target
-│   ├── CMakeLists.txt       <-- Builds simulator_207610130_215664087 executable
+│   ├── CMakeLists.txt       <-- Builds simulator_207610130_215664087 executable (independent build)
 │   ├── include/Simulator/   <-- Registrar.h, DlLoader.h, ArgumentParser.h, SimulationEngine.h, ResultExporter.h
 │   └── src/                 <-- Simulator entry point and task dispatcher
 │
 ├── CMakeLists.txt           <-- Root CMake file building all 3 projects
-├── README.md
-└── students.txt
+├── README.md                <-- Project documentation
+└── students.txt             <-- Submitter names and IDs
 ```
 
 ---
@@ -53,9 +53,9 @@ ex_3_skeleton-main/
 ## Dynamic Registration & Loading Mechanism
 
 - Shared libraries (`.so`) invoke static auto-registration macros (`REGISTER_MAPPING_ALGORITHM` / `REGISTER_MISSION_CONTROL`) at global scope.
-- When `dlopen()` loads a `.so` library, its global static constructors execute immediately and register a factory lambda with the `Registrar` singleton inside the Simulator.
+- When `dlopen()` loads a `.so` library on the main thread, its global static constructors execute immediately and register a factory lambda with the `Registrar` singleton inside the Simulator.
 - The `DlLoader` retrieves the factory from the `Registrar` and creates objects on demand.
-- Before `dlclose()` is invoked, all instantiated objects associated with the `.so` library are destroyed.
+- **Strict Lifetime Ordering**: All instantiated algorithm/mission control objects and captured factory `std::function` objects are explicitly reset/destroyed *before* `dlclose()` unmaps the shared library.
 
 ---
 
@@ -63,37 +63,71 @@ ex_3_skeleton-main/
 
 - Controlled by the `num_threads` command-line argument:
   - `num_threads` omitted or `num_threads=1`: Execution runs synchronously on the main thread.
-  - `num_threads >= 2`: Spawns `<num_threads>` worker threads in addition to the main thread. The main thread delegates tasks to a concurrent work queue and performs a blocking wait (`join()`) for worker completion.
-- The simulator never spawns idle worker threads if the total number of tasks is smaller than `num_threads`.
+  - `num_threads >= 2`: Spawns `<num_threads>` worker threads in addition to the main thread. The main thread joins worker completion.
+- **Fine-Grained SimulationJob Queue**: Work is divided at the individual simulation run level (`simulation × mission × drone × lidar` Cartesian specs) across all tested plugins.
+- Worker threads pull from an atomic job index counter, ensuring full thread utilization even when testing a single plugin across multiple scenarios.
+- The simulator never spawns idle worker threads if the total number of jobs is smaller than `num_threads`.
+
+---
+
+## Error Handling & Logging
+
+- **Error Continuation**: If a single simulation run encounters an error, it is recorded with `score = -1.0` and `status = "error"`, and the simulator proceeds to execute all subsequent runs.
+- **Immediate Error Logging**: Errors are logged immediately to `error_log.txt` under a thread-safe mutex and flushed.
+- **Verbose Mode (`-verbose`)**: Creates dedicated `_verbose.log` files with step-by-step telemetry on disk for each mission run.
 
 ---
 
 ## Building and Running
 
-### Build Instructions
+### 1. Building Entire Project from Root
 ```bash
 cmake --preset default
 cmake --build --preset default
 ```
 
-### Running Comparative Mode
+### 2. Building Each Module Independently
+
+#### Mapping Algorithm:
 ```bash
-./build/Simulator/simulator_207610130_215664087 \
+cmake -S Algorithm -B build_algo
+cmake --build build_algo
+```
+
+#### Mission Control:
+```bash
+cmake -S MissionControl -B build_mc
+cmake --build build_mc
+```
+
+#### Simulator:
+```bash
+cmake -S Simulator -B build_sim
+cmake --build build_sim
+```
+
+---
+
+### Running the Simulator
+
+#### Comparative Mode:
+```bash
+./build/default/Simulator/simulator_207610130_215664087 \
   -comparative \
-  simulation=inputs/simulation_compositions.yaml \
-  mission_control_folder=./build/MissionControl \
-  algorithm=./build/Algorithm/Algorithm_207610130_215664087.so \
-  num_threads=2 \
+  simulation=inputs/sim_compose.yaml \
+  mission_control_folder=./build/default/MissionControl \
+  algorithm=./build/default/Algorithm/Algorithm_207610130_215664087.so \
+  num_threads=4 \
   -verbose
 ```
 
-### Running Competitive Mode
+#### Competitive Mode:
 ```bash
-./build/Simulator/simulator_207610130_215664087 \
+./build/default/Simulator/simulator_207610130_215664087 \
   -competition \
-  simulation=inputs/simulation_compositions.yaml \
-  mission_control=./build/MissionControl/MissionControl_207610130_215664087.so \
-  algorithms_folder=./build/Algorithm \
-  num_threads=2 \
+  simulation=inputs/sim_compose.yaml \
+  mission_control=./build/default/MissionControl/MissionControl_207610130_215664087.so \
+  algorithms_folder=./build/default/Algorithm \
+  num_threads=4 \
   -verbose
 ```

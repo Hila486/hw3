@@ -59,6 +59,23 @@ Summary calculateSummary(const std::vector<SingleRunResult>& runs) {
     return summary;
 }
 
+/// Signature representing the exact run-by-run outcome for grouping agreeing managers.
+struct ManagerRunSignature {
+    double total_score = 0.0;
+    std::size_t total_steps = 0;
+    std::vector<std::tuple<std::string, std::size_t, double>> run_outcomes;
+
+    bool operator<(const ManagerRunSignature& other) const {
+        if (std::abs(total_score - other.total_score) > 1.0e-6) {
+            return total_score > other.total_score;
+        }
+        if (total_steps != other.total_steps) {
+            return total_steps < other.total_steps;
+        }
+        return run_outcomes < other.run_outcomes;
+    }
+};
+
 } // namespace
 
 std::string ResultExporter::getCurrentUtcTimestamp() {
@@ -97,25 +114,21 @@ void ResultExporter::exportComparativeReport(
     const std::vector<ComparativeManagerResult>& manager_results,
     const std::vector<std::string>& error_managers) {
 
-    struct ResultKey {
-        double score;
-        std::size_t steps;
-        bool operator<(const ResultKey& other) const {
-            if (std::abs(score - other.score) > 1.0e-6) {
-                return score > other.score;
-            }
-            return steps < other.steps;
-        }
-    };
-
-    std::map<ResultKey, std::vector<std::string>> groups_map;
+    // Group managers by matching run-by-run results signature
+    std::map<ManagerRunSignature, std::vector<std::string>> groups_map;
     for (const auto& res : manager_results) {
-        groups_map[{res.total_score, res.total_steps}].push_back(res.manager_so_name);
+        ManagerRunSignature sig;
+        sig.total_score = res.total_score;
+        sig.total_steps = res.total_steps;
+        for (const auto& run : res.individual_runs) {
+            sig.run_outcomes.emplace_back(run.status, run.steps, run.score);
+        }
+        groups_map[sig].push_back(res.manager_so_name);
     }
 
     std::vector<ComparativeGroupResult> groups;
-    for (const auto& [key, managers] : groups_map) {
-        groups.push_back(ComparativeGroupResult{managers, key.score, key.steps});
+    for (const auto& [sig, managers] : groups_map) {
+        groups.push_back(ComparativeGroupResult{managers, sig.total_score, sig.total_steps});
     }
 
     // Sort by number of agreeing managers descending, then by score descending, then by steps ascending
@@ -136,6 +149,7 @@ void ResultExporter::exportComparativeReport(
         return;
     }
 
+    out << std::fixed << std::setprecision(2);
     out << "comparative_report:\n";
     out << "  composition_file: \"" << composition_filename << "\"\n";
     out << "  mission_control_folder: \"" << mc_folder_name << "\"\n";
@@ -149,7 +163,7 @@ void ResultExporter::exportComparativeReport(
             out << "\"" << group.agreeing_managers[i] << "\"";
         }
         out << "]\n";
-        out << "      total_score: " << std::llround(group.total_score) << "\n";
+        out << "      total_score: " << group.total_score << "\n";
         out << "      total_steps: " << group.total_steps << "\n";
     }
 
@@ -184,6 +198,7 @@ void ResultExporter::exportCompetitiveReport(
         return;
     }
 
+    out << std::fixed << std::setprecision(2);
     out << "competitive_report:\n";
     out << "  composition_file: \"" << composition_filename << "\"\n";
     out << "  mission_control: \"" << mc_so_name << "\"\n";
@@ -192,7 +207,7 @@ void ResultExporter::exportCompetitiveReport(
 
     for (const auto& res : sorted_results) {
         out << "    - algorithm: \"" << res.algorithm_so_name << "\"\n";
-        out << "      total_score: " << std::llround(res.total_score) << "\n";
+        out << "      total_score: " << res.total_score << "\n";
         out << "      total_steps: " << res.total_steps << "\n";
     }
 
@@ -237,7 +252,6 @@ void ResultExporter::exportPerSoReport(
     out << "  simulations:\n";
 
     // Group runs by simulation_config -> mission_config
-    // Map: simulation_config_name -> Map: mission_config_name -> vector<SingleRunResult>
     std::map<std::string, std::map<std::string, std::vector<SingleRunResult>>> sim_groups;
     for (const auto& run : individual_runs) {
         sim_groups[run.simulation_config_name][run.mission_config_name].push_back(run);

@@ -1,6 +1,8 @@
 #include <Simulator/ArgumentParser.h>
 
+#include <cctype>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <set>
 #include <sstream>
@@ -19,15 +21,52 @@ constexpr const char* kUsageText =
     "  ./simulator_<ids> -competition simulation=<simulation_composition_yaml> mission_control=<mission_control_so> algorithms_folder=<folder> [num_threads=<num>] [-verbose]\n";
 
 bool hasSoFiles(const std::filesystem::path& folder_path) {
-    if (!std::filesystem::is_directory(folder_path)) {
+    try {
+        if (!std::filesystem::is_directory(folder_path)) {
+            return false;
+        }
+        for (const auto& entry : std::filesystem::directory_iterator(folder_path)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".so") {
+                return true;
+            }
+        }
+    } catch (...) {
         return false;
     }
-    for (const auto& entry : std::filesystem::directory_iterator(folder_path)) {
-        if (entry.is_regular_file() && entry.path().extension() == ".so") {
-            return true;
+    return false;
+}
+
+bool canOpenFile(const std::filesystem::path& file_path) {
+    try {
+        if (!std::filesystem::is_regular_file(file_path)) {
+            return false;
+        }
+        std::ifstream file(file_path);
+        return file.is_open();
+    } catch (...) {
+        return false;
+    }
+}
+
+bool isStrictPositiveInteger(const std::string& str, std::size_t& result) {
+    if (str.empty()) {
+        return false;
+    }
+    for (char c : str) {
+        if (!std::isdigit(static_cast<unsigned char>(c))) {
+            return false;
         }
     }
-    return false;
+    try {
+        long long val = std::stoll(str);
+        if (val <= 0) {
+            return false;
+        }
+        result = static_cast<std::size_t>(val);
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 std::string formatErrorWithUsage(const std::string& error_message) {
@@ -126,19 +165,14 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
     args.mode = *mode;
     args.verbose = verbose;
 
-    // Check optional num_threads
+    // Check optional num_threads with strict positive integer parsing
     if (kv_args.count("num_threads")) {
-        try {
-            int threads = std::stoi(kv_args["num_threads"]);
-            if (threads <= 0) {
-                last_error_ = formatErrorWithUsage("Error: num_threads must be a positive integer.");
-                return std::nullopt;
-            }
-            args.num_threads = static_cast<std::size_t>(threads);
-        } catch (...) {
-            last_error_ = formatErrorWithUsage("Error: Invalid num_threads argument value: " + kv_args["num_threads"]);
+        std::size_t threads = 0;
+        if (!isStrictPositiveInteger(kv_args["num_threads"], threads)) {
+            last_error_ = formatErrorWithUsage("Error: Invalid num_threads value: " + kv_args["num_threads"] + ". Must be a positive integer.");
             return std::nullopt;
         }
+        args.num_threads = threads;
     }
 
     // Validate simulation config file
@@ -147,7 +181,7 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
         return std::nullopt;
     }
     args.simulation_file = kv_args["simulation"];
-    if (!std::filesystem::exists(args.simulation_file) || !std::filesystem::is_regular_file(args.simulation_file)) {
+    if (!canOpenFile(args.simulation_file)) {
         last_error_ = formatErrorWithUsage("Error: Simulation file does not exist or cannot be opened: " + args.simulation_file.string());
         return std::nullopt;
     }
@@ -175,13 +209,18 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
         args.mission_control_folder = kv_args["mission_control_folder"];
         args.algorithm_file = kv_args["algorithm"];
 
-        if (!std::filesystem::exists(args.algorithm_file) || !std::filesystem::is_regular_file(args.algorithm_file)) {
+        if (!canOpenFile(args.algorithm_file)) {
             last_error_ = formatErrorWithUsage("Error: Algorithm library file does not exist or cannot be opened: " + args.algorithm_file.string());
             return std::nullopt;
         }
 
-        if (!std::filesystem::exists(args.mission_control_folder) || !std::filesystem::is_directory(args.mission_control_folder)) {
-            last_error_ = formatErrorWithUsage("Error: Mission control folder does not exist or cannot be traversed: " + args.mission_control_folder.string());
+        try {
+            if (!std::filesystem::is_directory(args.mission_control_folder)) {
+                last_error_ = formatErrorWithUsage("Error: Mission control folder does not exist or is not a directory: " + args.mission_control_folder.string());
+                return std::nullopt;
+            }
+        } catch (const std::exception& e) {
+            last_error_ = formatErrorWithUsage("Error: Mission control folder cannot be accessed: " + args.mission_control_folder.string() + " (" + e.what() + ")");
             return std::nullopt;
         }
 
@@ -213,13 +252,18 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
         args.mission_control_file = kv_args["mission_control"];
         args.algorithms_folder = kv_args["algorithms_folder"];
 
-        if (!std::filesystem::exists(args.mission_control_file) || !std::filesystem::is_regular_file(args.mission_control_file)) {
+        if (!canOpenFile(args.mission_control_file)) {
             last_error_ = formatErrorWithUsage("Error: Mission control library file does not exist or cannot be opened: " + args.mission_control_file.string());
             return std::nullopt;
         }
 
-        if (!std::filesystem::exists(args.algorithms_folder) || !std::filesystem::is_directory(args.algorithms_folder)) {
-            last_error_ = formatErrorWithUsage("Error: Algorithms folder does not exist or cannot be traversed: " + args.algorithms_folder.string());
+        try {
+            if (!std::filesystem::is_directory(args.algorithms_folder)) {
+                last_error_ = formatErrorWithUsage("Error: Algorithms folder does not exist or is not a directory: " + args.algorithms_folder.string());
+                return std::nullopt;
+            }
+        } catch (const std::exception& e) {
+            last_error_ = formatErrorWithUsage("Error: Algorithms folder cannot be accessed: " + args.algorithms_folder.string() + " (" + e.what() + ")");
             return std::nullopt;
         }
 

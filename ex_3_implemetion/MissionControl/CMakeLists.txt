@@ -1,34 +1,40 @@
-# MissionControl — builds as a SHARED library (.so) dynamically loaded by the Simulator.
-# The .so name must be MissionControl_207610130_215664087.so (no "lib" prefix).
+cmake_minimum_required(VERSION 3.15)
+project(MissionControl LANGUAGES CXX)
 
-find_package(yaml-cpp CONFIG REQUIRED)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+find_package(mp-units CONFIG REQUIRED)
+
+# If built independently, import common target
+if(NOT TARGET common::common)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../common common_build)
+endif()
+
+# Build MissionControl as a shared dynamic library (.so)
 add_library(MissionControl_207610130_215664087 SHARED
     src/MissionControlImpl_207610130_215664087.cpp
-    # UserCommon sources compiled directly into this library
-    ${CMAKE_SOURCE_DIR}/UserCommon/src/Map3DImpl.cpp
-    ${CMAKE_SOURCE_DIR}/UserCommon/src/MockGPS.cpp
-    ${CMAKE_SOURCE_DIR}/UserCommon/src/MockMovement.cpp
-    ${CMAKE_SOURCE_DIR}/UserCommon/src/MockLidar.cpp
-    ${CMAKE_SOURCE_DIR}/UserCommon/src/DroneControlImpl.cpp
-    ${CMAKE_SOURCE_DIR}/UserCommon/src/ScanResultToVoxels.cpp
-    ${CMAKE_SOURCE_DIR}/UserCommon/src/ConfigParser.cpp
-    ${CMAKE_SOURCE_DIR}/UserCommon/src/NpyMapIO.cpp
-    ${CMAKE_SOURCE_DIR}/UserCommon/src/MapsComparison.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/src/DroneControlImpl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/src/ScanResultToVoxels.cpp
 )
 
-# Remove the "lib" prefix so the output is MissionControl_207610130_215664087.so
-set_target_properties(MissionControl_207610130_215664087 PROPERTIES PREFIX "")
+set_target_properties(MissionControl_207610130_215664087 PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "MissionControl_207610130_215664087"
+)
 
 target_include_directories(MissionControl_207610130_215664087 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/common_mission_control/include
-    ${CMAKE_SOURCE_DIR}/UserCommon/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/include
 )
 
 target_link_libraries(MissionControl_207610130_215664087 PRIVATE
     common::common
-    yaml-cpp
 )
 
-drone_warnings(MissionControl_207610130_215664087)
+if(COMMAND drone_warnings)
+    drone_warnings(MissionControl_207610130_215664087)
+else()
+    target_compile_options(MissionControl_207610130_215664087 PRIVATE -Wall -Wextra -Werror -pedantic)
+endif()
