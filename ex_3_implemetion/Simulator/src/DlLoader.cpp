@@ -86,6 +86,8 @@ bool DlLoader::load() {
 }
 
 void DlLoader::unload() {
+    algorithm_factory_.reset();
+    mc_factory_.reset();
     if (handle_ != nullptr) {
 #ifdef _WIN32
         FreeLibrary(static_cast<HMODULE>(handle_));

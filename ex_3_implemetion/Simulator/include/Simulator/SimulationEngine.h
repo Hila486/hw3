@@ -25,8 +25,8 @@ public:
     bool run();
 
 private:
-    void runComparative();
-    void runCompetitive();
+    bool runComparative();
+    bool runCompetitive();
 
     ParsedArgs args_;
 };

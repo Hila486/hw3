@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -48,6 +49,16 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
     std::vector<std::string> unsupported_args;
     bool verbose = false;
 
+    // Supported keys across both modes
+    const std::set<std::string> known_keys = {
+        "simulation",
+        "mission_control_folder",
+        "mission_control",
+        "algorithm",
+        "algorithms_folder",
+        "num_threads"
+    };
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-comparative") {
@@ -69,10 +80,34 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
             if (pos != std::string::npos && pos > 0 && pos < arg.length() - 1) {
                 std::string key = arg.substr(0, pos);
                 std::string value = arg.substr(pos + 1);
-                kv_args[key] = value;
+                if (known_keys.count(key)) {
+                    kv_args[key] = value;
+                } else {
+                    unsupported_args.push_back(arg);
+                }
             } else {
                 unsupported_args.push_back(arg);
             }
+        }
+    }
+
+    if (!mode) {
+        last_error_ = formatErrorWithUsage("Error: Missing mandatory execution mode flag (-comparative or -competition).");
+        return std::nullopt;
+    }
+
+    // Mode-specific whitelist validation
+    const std::set<std::string> comparative_allowed = {
+        "simulation", "mission_control_folder", "algorithm", "num_threads"
+    };
+    const std::set<std::string> competition_allowed = {
+        "simulation", "mission_control", "algorithms_folder", "num_threads"
+    };
+
+    const auto& allowed_keys = (*mode == ExecutionMode::Comparative) ? comparative_allowed : competition_allowed;
+    for (const auto& [key, value] : kv_args) {
+        if (!allowed_keys.count(key)) {
+            unsupported_args.push_back(key + "=" + value);
         }
     }
 
@@ -84,11 +119,6 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
             error_stream << unsupported_args[i];
         }
         last_error_ = formatErrorWithUsage(error_stream.str());
-        return std::nullopt;
-    }
-
-    if (!mode) {
-        last_error_ = formatErrorWithUsage("Error: Missing mandatory execution mode flag (-comparative or -competition).");
         return std::nullopt;
     }
 

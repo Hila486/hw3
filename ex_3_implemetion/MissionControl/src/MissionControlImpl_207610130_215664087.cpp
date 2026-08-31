@@ -43,30 +43,53 @@ MissionControlImpl_207610130_215664087::MissionControlImpl_207610130_215664087(
  * @brief Runs the drone mission stepping loop up to mission_config_.max_steps.
  */
 common::types::MissionRunResult MissionControlImpl_207610130_215664087::runMission() {
-    auto saveOutputMap = [this](std::vector<common::types::ErrorRef>& errors) {
+    std::ofstream verbose_log;
+    if (verbose_) {
+        try {
+            std::filesystem::path verbose_log_file =
+                output_map_file_.parent_path() / (output_map_file_.stem().string() + "_verbose.log");
+            verbose_log.open(verbose_log_file, std::ios::trunc);
+            if (verbose_log) {
+                verbose_log << "[MissionControl] Starting mission run\n"
+                            << "  Output map file: " << output_map_file_.string() << "\n"
+                            << "  Max steps: " << mission_config_.max_steps << "\n";
+            }
+        } catch (...) {
+            // Ignore file logging failure
+        }
+    }
+
+    auto saveOutputMap = [this, &verbose_log](std::vector<common::types::ErrorRef>& errors) {
         try {
             output_map_.save(output_map_file_);
+            if (verbose_log.is_open()) {
+                verbose_log << "[MissionControl] Saved output map to " << output_map_file_.string() << "\n";
+            }
             return true;
         } catch (const std::exception& exception) {
             addError(errors, "OUTPUT_MAP_SAVE_FAILED", exception.what());
+            if (verbose_log.is_open()) {
+                verbose_log << "[MissionControl] Failed to save output map: " << exception.what() << "\n";
+            }
         } catch (...) {
             addError(errors, "OUTPUT_MAP_SAVE_FAILED", "Unknown error while saving output map.");
+            if (verbose_log.is_open()) {
+                verbose_log << "[MissionControl] Unknown error while saving output map.\n";
+            }
         }
         return false;
     };
-
-    if (verbose_) {
-        std::cout << "[MissionControl] Starting mission run for output map: "
-                  << output_map_file_.string() << std::endl;
-    }
 
     for (std::size_t executed_steps = 0; executed_steps < mission_config_.max_steps; ++executed_steps) {
         const common::types::DroneStepResult step_result = drone_control_.step();
         const std::size_t completed_steps = executed_steps + 1;
 
-        if (verbose_) {
-            std::cout << "[MissionControl] Step " << completed_steps << "/" << mission_config_.max_steps
-                      << " completed." << std::endl;
+        if (verbose_log.is_open()) {
+            verbose_log << "[Step " << completed_steps << "/" << mission_config_.max_steps << "] "
+                        << "status: " << (step_result.status == common::types::DroneStepStatus::Continue ? "Continue" :
+                                         (step_result.status == common::types::DroneStepStatus::Completed ? "Completed" : "Error"))
+                        << (step_result.message.empty() ? "" : (" message: " + step_result.message))
+                        << "\n";
         }
 
         if (step_result.status == common::types::DroneStepStatus::Completed) {
@@ -75,6 +98,10 @@ common::types::MissionRunResult MissionControlImpl_207610130_215664087::runMissi
                 return common::types::MissionRunResult{common::types::MissionRunStatus::Error,
                                                        completed_steps,
                                                        std::move(errors)};
+            }
+
+            if (verbose_log.is_open()) {
+                verbose_log << "[MissionControl] Mission completed successfully in " << completed_steps << " steps.\n";
             }
 
             return common::types::MissionRunResult{common::types::MissionRunStatus::Completed,
@@ -89,6 +116,12 @@ common::types::MissionRunResult MissionControlImpl_207610130_215664087::runMissi
                      step_result.message.empty() ? "Drone control step failed."
                                                  : step_result.message);
             saveOutputMap(errors);
+
+            if (verbose_log.is_open()) {
+                verbose_log << "[MissionControl] Mission terminated with error at step " << completed_steps << ": "
+                            << (step_result.message.empty() ? "Drone control step failed." : step_result.message) << "\n";
+            }
+
             return common::types::MissionRunResult{common::types::MissionRunStatus::Error,
                                                    completed_steps,
                                                    std::move(errors)};
@@ -100,6 +133,10 @@ common::types::MissionRunResult MissionControlImpl_207610130_215664087::runMissi
         return common::types::MissionRunResult{common::types::MissionRunStatus::Error,
                                                mission_config_.max_steps,
                                                std::move(errors)};
+    }
+
+    if (verbose_log.is_open()) {
+        verbose_log << "[MissionControl] Mission reached max_steps (" << mission_config_.max_steps << ").\n";
     }
 
     return common::types::MissionRunResult{common::types::MissionRunStatus::MaxSteps,
