@@ -1,0 +1,399 @@
+#include <Simulator/SimulationEngine.h>
+#include <Simulator/DlLoader.h>
+#include <Simulator/ResultExporter.h>
+
+#include <UserCommon/ConfigParser.h>
+#include <UserCommon/Map3DImpl.h>
+#include <UserCommon/MapsComparison.h>
+#include <UserCommon/MockGPS.h>
+#include <UserCommon/MockLidar.h>
+#include <UserCommon/MockMovement.h>
+#include <UserCommon/NpyMapIO.h>
+
+#include <algorithm>
+#include <atomic>
+#include <filesystem>
+#include <iostream>
+#include <mutex>
+#include <thread>
+#include <utility>
+#include <vector>
+
+namespace simulator_207610130_215664087 {
+
+namespace {
+
+using namespace user_common_207610130_215664087;
+
+std::vector<std::filesystem::path> discoverSoFiles(const std::filesystem::path& folder) {
+    std::vector<std::filesystem::path> files;
+    if (!std::filesystem::is_directory(folder)) {
+        return files;
+    }
+    for (const auto& entry : std::filesystem::directory_iterator(folder)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".so") {
+            files.push_back(entry.path());
+        }
+    }
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+struct SingleRunSpec {
+    common::types::SimulationConfigData simulation_config;
+    common::types::MissionConfigData mission_config;
+    common::types::DroneConfigData drone_config;
+    common::types::LidarConfigData lidar_config;
+    std::size_t run_index = 0;
+};
+
+struct RunOutputResult {
+    bool success = false;
+    double score = 0.0;
+    std::size_t steps = 0;
+    std::string error_message;
+};
+
+RunOutputResult executeSingleRun(
+    const std::filesystem::path& mc_so_path,
+    const std::filesystem::path& algo_so_path,
+    const SingleRunSpec& spec,
+    const std::filesystem::path& run_output_file,
+    bool verbose) {
+
+    RunOutputResult result;
+    try {
+        // Load dynamic libraries
+        DlLoader algo_loader(algo_so_path);
+        if (!algo_loader.load()) {
+            result.error_message = "Failed to load algorithm library " + algo_so_path.filename().string() + ": " + algo_loader.error();
+            return result;
+        }
+
+        DlLoader mc_loader(mc_so_path);
+        if (!mc_loader.load()) {
+            result.error_message = "Failed to load mission control library " + mc_so_path.filename().string() + ": " + mc_loader.error();
+            return result;
+        }
+
+        auto algo_factory = algo_loader.getAlgorithmFactory();
+        auto mc_factory = mc_loader.getMissionControlFactory();
+
+        if (!algo_factory) {
+            result.error_message = "Algorithm library " + algo_so_path.filename().string() + " did not register a factory.";
+            return result;
+        }
+        if (!mc_factory) {
+            result.error_message = "MissionControl library " + mc_so_path.filename().string() + " did not register a factory.";
+            return result;
+        }
+
+        // Load ground truth map
+        auto hidden_map_ptr = loadNormalizedNpyMap(spec.simulation_config.map_filename);
+        common::types::MapConfig hidden_map_config{
+            spec.simulation_config.map_resolution,
+            spec.simulation_config.map_axes_offset,
+            spec.mission_config.boundaries
+        };
+        Map3DImpl hidden_map(hidden_map_ptr, hidden_map_config);
+
+        // Create output map
+        NpyMapShape hidden_shape = npyMapShape(*hidden_map_ptr, spec.simulation_config.map_filename);
+        auto output_map_ptr = makeFilledIntNpyArray(hidden_shape, static_cast<int>(common::types::VoxelOccupancy::Unmapped));
+        common::types::MapConfig output_map_config{
+            spec.simulation_config.map_resolution,
+            spec.simulation_config.map_axes_offset,
+            spec.mission_config.boundaries
+        };
+        Map3DImpl output_map(output_map_ptr, output_map_config);
+
+        // Hardware Mocks
+        MockGPS gps(spec.simulation_config.initial_drone_position,
+                    Orientation{spec.simulation_config.initial_angle, 0.0 * altitude_angle[deg]},
+                    spec.mission_config.gps_resolution);
+        MockMovement movement(gps, &hidden_map);
+        MockLidar lidar(spec.lidar_config, hidden_map, gps);
+
+        // Instantiate Algorithm
+        common::MappingAlgorithmDependencies algo_deps{
+            spec.mission_config,
+            spec.lidar_config,
+            spec.drone_config,
+            output_map
+        };
+        auto mapping_algorithm = (*algo_factory)(std::move(algo_deps));
+
+        // Instantiate MissionControl
+        common::MissionControlDependencies mc_deps{
+            spec.mission_config,
+            spec.drone_config,
+            lidar,
+            gps,
+            movement,
+            output_map,
+            *mapping_algorithm,
+            run_output_file,
+            verbose
+        };
+        auto mission_control = (*mc_factory)(std::move(mc_deps));
+
+        // Execute run
+        common::types::MissionRunResult run_res = mission_control->runMission();
+        result.steps = run_res.steps;
+
+        if (run_res.status == common::types::MissionRunStatus::Error) {
+            result.error_message = "Mission run reported error.";
+            result.score = -1.0;
+            return result;
+        }
+
+        // Score map vs hidden map
+        std::vector<common::IMap3D*> targets{&output_map};
+        std::vector<double> scores = MapsComparison::compare(hidden_map, targets);
+        result.score = scores.empty() ? 0.0 : scores[0];
+        result.success = true;
+
+        // Clean destruction before unloading
+        mission_control.reset();
+        mapping_algorithm.reset();
+
+    } catch (const std::exception& ex) {
+        result.error_message = std::string("Exception during execution: ") + ex.what();
+        result.score = -1.0;
+    }
+
+    return result;
+}
+
+} // namespace
+
+SimulationEngine::SimulationEngine(ParsedArgs args) : args_(std::move(args)) {}
+
+bool SimulationEngine::run() {
+    if (args_.mode == ExecutionMode::Comparative) {
+        runComparative();
+    } else {
+        runCompetitive();
+    }
+    return true;
+}
+
+void SimulationEngine::runComparative() {
+    auto mc_files = discoverSoFiles(args_.mission_control_folder);
+    if (mc_files.empty()) {
+        std::cerr << "Error: No .so files found in mission_control_folder: " << args_.mission_control_folder.string() << std::endl;
+        return;
+    }
+
+    common::types::SimulationCompositionData composition;
+    try {
+        composition = ConfigParser::parseSimulationComposition(args_.simulation_file);
+    } catch (const std::exception& ex) {
+        std::cerr << "Error: Failed to parse composition file: " << ex.what() << std::endl;
+        return;
+    }
+
+    // Build Cartesian run specifications
+    std::vector<SingleRunSpec> run_specs;
+    std::size_t run_idx = 0;
+    for (const auto& group : composition.simulation_mission_groups) {
+        const auto& sim_config = std::get<0>(group);
+        const auto& missions = std::get<1>(group);
+        for (const auto& mission_config : missions) {
+            for (const auto& drone_config : composition.drone_configs) {
+                for (const auto& lidar_config : composition.lidar_configs) {
+                    run_specs.push_back(SingleRunSpec{sim_config, mission_config, drone_config, lidar_config, ++run_idx});
+                }
+            }
+        }
+    }
+
+    // Prepare output directory
+    std::string timestamp = ResultExporter::getFolderTimestamp();
+    std::filesystem::path output_dir = args_.mission_control_folder / ("comparative_results_" + timestamp);
+    std::filesystem::create_directories(output_dir);
+
+    std::vector<ComparativeManagerResult> manager_results;
+    std::vector<std::string> error_managers;
+    std::mutex results_mutex;
+
+    // Concurrency Task Queue
+    std::atomic<std::size_t> mc_file_idx{0};
+
+    auto worker = [&]() {
+        while (true) {
+            std::size_t idx = mc_file_idx.fetch_add(1);
+            if (idx >= mc_files.size()) {
+                break;
+            }
+
+            const auto& mc_so_path = mc_files[idx];
+            std::string mc_so_name = mc_so_path.filename().string();
+            double total_score = 0.0;
+            std::size_t total_steps = 0;
+            bool mc_failed = false;
+
+            for (const auto& spec : run_specs) {
+                std::ostringstream file_ss;
+                file_ss << "output_map_" << mc_so_name << "_run_" << spec.run_index << ".npy";
+                std::filesystem::path run_output_file = output_dir / file_ss.str();
+
+                RunOutputResult run_res = executeSingleRun(
+                    mc_so_path, args_.algorithm_file, spec, run_output_file, args_.verbose);
+
+                if (!run_res.success) {
+                    mc_failed = true;
+                    break;
+                }
+
+                total_score += run_res.score;
+                total_steps += run_res.steps;
+            }
+
+            std::lock_guard<std::mutex> lock(results_mutex);
+            if (mc_failed) {
+                error_managers.push_back(mc_so_name);
+            } else {
+                manager_results.push_back(ComparativeManagerResult{mc_so_name, total_score, total_steps});
+            }
+        }
+    };
+
+    std::size_t num_worker_threads = (args_.num_threads >= 2) ? args_.num_threads : 0;
+    if (num_worker_threads == 0) {
+        // Run on main thread
+        worker();
+    } else {
+        std::size_t actual_threads = std::min(num_worker_threads, mc_files.size());
+        std::vector<std::thread> threads;
+        for (std::size_t i = 0; i < actual_threads; ++i) {
+            threads.emplace_back(worker);
+        }
+        for (auto& t : threads) {
+            if (t.joinable()) {
+                t.join();
+            }
+        }
+    }
+
+    // Export comparative report
+    ResultExporter::exportComparativeReport(
+        output_dir,
+        args_.simulation_file.filename().string(),
+        args_.mission_control_folder.filename().string(),
+        manager_results,
+        error_managers);
+
+    std::cout << "[Simulator] Comparative run finished. Results saved to: " << output_dir.string() << std::endl;
+}
+
+void SimulationEngine::runCompetitive() {
+    auto algo_files = discoverSoFiles(args_.algorithms_folder);
+    if (algo_files.empty()) {
+        std::cerr << "Error: No .so files found in algorithms_folder: " << args_.algorithms_folder.string() << std::endl;
+        return;
+    }
+
+    common::types::SimulationCompositionData composition;
+    try {
+        composition = ConfigParser::parseSimulationComposition(args_.simulation_file);
+    } catch (const std::exception& ex) {
+        std::cerr << "Error: Failed to parse composition file: " << ex.what() << std::endl;
+        return;
+    }
+
+    // Build Cartesian run specifications
+    std::vector<SingleRunSpec> run_specs;
+    std::size_t run_idx = 0;
+    for (const auto& group : composition.simulation_mission_groups) {
+        const auto& sim_config = std::get<0>(group);
+        const auto& missions = std::get<1>(group);
+        for (const auto& mission_config : missions) {
+            for (const auto& drone_config : composition.drone_configs) {
+                for (const auto& lidar_config : composition.lidar_configs) {
+                    run_specs.push_back(SingleRunSpec{sim_config, mission_config, drone_config, lidar_config, ++run_idx});
+                }
+            }
+        }
+    }
+
+    // Prepare output directory
+    std::string timestamp = ResultExporter::getFolderTimestamp();
+    std::filesystem::path output_dir = args_.algorithms_folder / ("competition_" + timestamp);
+    std::filesystem::create_directories(output_dir);
+
+    std::vector<CompetitiveAlgoResult> algo_results;
+    std::vector<std::string> error_algorithms;
+    std::mutex results_mutex;
+
+    // Concurrency Task Queue
+    std::atomic<std::size_t> algo_file_idx{0};
+
+    auto worker = [&]() {
+        while (true) {
+            std::size_t idx = algo_file_idx.fetch_add(1);
+            if (idx >= algo_files.size()) {
+                break;
+            }
+
+            const auto& algo_so_path = algo_files[idx];
+            std::string algo_so_name = algo_so_path.filename().string();
+            double total_score = 0.0;
+            std::size_t total_steps = 0;
+            bool algo_failed = false;
+
+            for (const auto& spec : run_specs) {
+                std::ostringstream file_ss;
+                file_ss << "output_map_" << algo_so_name << "_run_" << spec.run_index << ".npy";
+                std::filesystem::path run_output_file = output_dir / file_ss.str();
+
+                RunOutputResult run_res = executeSingleRun(
+                    args_.mission_control_file, algo_so_path, spec, run_output_file, args_.verbose);
+
+                if (!run_res.success) {
+                    algo_failed = true;
+                    break;
+                }
+
+                total_score += run_res.score;
+                total_steps += run_res.steps;
+            }
+
+            std::lock_guard<std::mutex> lock(results_mutex);
+            if (algo_failed) {
+                error_algorithms.push_back(algo_so_name);
+            } else {
+                algo_results.push_back(CompetitiveAlgoResult{algo_so_name, total_score, total_steps});
+            }
+        }
+    };
+
+    std::size_t num_worker_threads = (args_.num_threads >= 2) ? args_.num_threads : 0;
+    if (num_worker_threads == 0) {
+        // Run on main thread
+        worker();
+    } else {
+        std::size_t actual_threads = std::min(num_worker_threads, algo_files.size());
+        std::vector<std::thread> threads;
+        for (std::size_t i = 0; i < actual_threads; ++i) {
+            threads.emplace_back(worker);
+        }
+        for (auto& t : threads) {
+            if (t.joinable()) {
+                t.join();
+            }
+        }
+    }
+
+    // Export competitive report
+    ResultExporter::exportCompetitiveReport(
+        output_dir,
+        args_.simulation_file.filename().string(),
+        args_.mission_control_file.filename().string(),
+        algo_results,
+        error_algorithms);
+
+    std::cout << "[Simulator] Competition run finished. Results saved to: " << output_dir.string() << std::endl;
+}
+
+} // namespace simulator_207610130_215664087

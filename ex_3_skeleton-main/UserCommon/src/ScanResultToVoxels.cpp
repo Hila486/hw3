@@ -1,0 +1,148 @@
+#include <UserCommon/ScanResultToVoxels.h>
+
+#include <mp-units/systems/si/math.h>
+
+#include <limits>
+
+namespace user_common_207610130_215664087 {
+
+namespace {
+
+[[nodiscard]] bool isZeroDistance(PhysicalLength distance) {
+    return distance == 0.0 * cm;
+}
+
+[[nodiscard]] bool isMissDistance(PhysicalLength distance) {
+    return distance.force_numerical_value_in(cm) == std::numeric_limits<double>::max();
+}
+
+[[nodiscard]] Orientation absoluteBeamOrientation(const Orientation& drone_heading,
+                                                  const Orientation& relative_beam) {
+    return Orientation{
+        relative_beam.horizontal + drone_heading.horizontal,
+        relative_beam.altitude + drone_heading.altitude,
+    };
+}
+
+[[nodiscard]] Position3D pointAlongBeam(const Position3D& origin,
+                                        const Orientation& beam_orientation,
+                                        PhysicalLength distance) {
+    const auto cos_altitude = si::cos(beam_orientation.altitude);
+    const auto dx = cos_altitude * si::cos(beam_orientation.horizontal);
+    const auto dy = cos_altitude * si::sin(beam_orientation.horizontal);
+    const auto dz = si::sin(beam_orientation.altitude);
+
+    const double distance_cm = distance.force_numerical_value_in(cm);
+    const double dir_x = dx.force_numerical_value_in(mp::one);
+    const double dir_y = dy.force_numerical_value_in(mp::one);
+    const double dir_z = dz.force_numerical_value_in(mp::one);
+
+    return Position3D{
+        origin.x + dir_x * distance_cm * x_extent[cm],
+        origin.y + dir_y * distance_cm * y_extent[cm],
+        origin.z + dir_z * distance_cm * z_extent[cm],
+    };
+}
+
+[[nodiscard]] int occupancyPriority(common::types::VoxelOccupancy occupancy) {
+    switch (occupancy) {
+    case common::types::VoxelOccupancy::Occupied:
+        return 3;
+    case common::types::VoxelOccupancy::Empty:
+        return 2;
+    case common::types::VoxelOccupancy::PotentiallyOccupied:
+        return 1;
+    case common::types::VoxelOccupancy::Unmapped:
+    case common::types::VoxelOccupancy::OutOfBounds:
+        return 0;
+    }
+
+    return 0;
+}
+
+void setIfStronger(common::IMutableMap3D& output_map,
+                   const Position3D& position,
+                   common::types::VoxelOccupancy value) {
+    if (!output_map.isInBounds(position)) {
+        return;
+    }
+
+    const common::types::VoxelOccupancy current_value = output_map.atVoxel(position);
+    if (occupancyPriority(value) > occupancyPriority(current_value)) {
+        output_map.set(position, value);
+    }
+}
+
+void markBeamSegment(common::IMutableMap3D& output_map,
+                     const Position3D& scan_origin,
+                     const Orientation& beam_orientation,
+                     PhysicalLength start_distance,
+                     PhysicalLength end_distance,
+                     PhysicalLength step,
+                     common::types::VoxelOccupancy value) {
+    for (PhysicalLength distance = start_distance; distance <= end_distance; distance += step) {
+        const Position3D current_point = pointAlongBeam(scan_origin, beam_orientation, distance);
+        if (!output_map.isInBounds(current_point)) {
+            break;
+        }
+        setIfStronger(output_map, current_point, value);
+    }
+}
+
+} // namespace
+
+void ScanResultToVoxels::applyToMap(common::IMutableMap3D& output_map,
+                                    const Position3D& scan_origin,
+                                    const Orientation& drone_heading,
+                                    const common::types::LidarScanResult& scan,
+                                    const common::types::LidarConfigData& lidar_config) {
+    if (!output_map.isInBounds(scan_origin)) {
+        return;
+    }
+
+    const PhysicalLength step = 0.1 * output_map.getMapConfig().resolution;
+    if (step <= 0.0 * cm) {
+        return;
+    }
+
+    for (const common::types::LidarHit& hit : scan) {
+        const Orientation beam_orientation = absoluteBeamOrientation(drone_heading, hit.angle);
+
+        if (isZeroDistance(hit.distance)) {
+            markBeamSegment(output_map,
+                            scan_origin,
+                            beam_orientation,
+                            0.0 * cm,
+                            lidar_config.z_min,
+                            step,
+                            common::types::VoxelOccupancy::PotentiallyOccupied);
+            continue;
+        }
+
+        if (isMissDistance(hit.distance)) {
+            markBeamSegment(output_map,
+                            scan_origin,
+                            beam_orientation,
+                            0.0 * cm,
+                            lidar_config.z_max,
+                            step,
+                            common::types::VoxelOccupancy::Empty);
+            continue;
+        }
+
+        if (hit.distance > 0.0 * cm) {
+            markBeamSegment(output_map,
+                            scan_origin,
+                            beam_orientation,
+                            0.0 * cm,
+                            hit.distance,
+                            step,
+                            common::types::VoxelOccupancy::Empty);
+            setIfStronger(output_map,
+                          pointAlongBeam(scan_origin, beam_orientation, hit.distance),
+                          common::types::VoxelOccupancy::Occupied);
+        }
+    }
+}
+
+} // namespace user_common_207610130_215664087
