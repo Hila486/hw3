@@ -2,7 +2,7 @@
 
 #include <Common/IMissionControl.h>
 #include <Common/MissionControlFactory.h>
-#include <UserCommon/DroneControlImpl.h>
+#include <MissionControl/DroneControlImpl.h>
 
 #include <filesystem>
 #include <memory>
@@ -36,7 +36,7 @@ private:
     common::IMutableMap3D& output_map_;
     std::filesystem::path output_map_file_;
     bool verbose_ = false;
-    user_common_207610130_215664087::DroneControlImpl drone_control_;
+    DroneControlImpl drone_control_;
 };
 
 } // namespace mission_control_207610130_215664087

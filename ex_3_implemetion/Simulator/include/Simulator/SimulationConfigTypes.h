@@ -1,21 +1,12 @@
 #pragma once
 
-/**
- * @file SimulationConfigTypes.h
- * @brief Simulation-specific configuration data types for UserCommon.
- *
- * These structs mirror the skeleton's simulator::types but live in the
- * user_common namespace so that ConfigParser (in UserCommon) can return them
- * without depending on the Simulator module.
- */
-
 #include <Common/Types.h>
 
 #include <filesystem>
 #include <tuple>
 #include <vector>
 
-namespace user_common_207610130_215664087 {
+namespace simulator_207610130_215664087 {
 
 using namespace common;
 
@@ -47,4 +38,4 @@ struct SimulationCompositionData {
     std::vector<common::types::LidarConfigData> lidar_configs{};  ///< All lidar configurations
 };
 
-} // namespace user_common_207610130_215664087
+} // namespace simulator_207610130_215664087

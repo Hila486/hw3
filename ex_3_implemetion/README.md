@@ -16,34 +16,43 @@ The system supports two execution modes:
 
 ---
 
-## Project Structure & Namespaces
+## Project Structure & Architectural Separation
+
+In strict alignment with the course's *Structuring the project* guidelines:
 
 ```text
 ex3_207610130_215664087/
 │
 ├── common/                  <-- Provided course interface headers (unmodified)
-│   └── include/Common/      <-- IMappingAlgorithm.h, IMissionControl.h, etc.
+│   ├── CMakeLists.txt
+│   └── include/Common/      <-- IMappingAlgorithm.h, IMissionControl.h, IMap3D.h, Types.h, etc.
 │
-├── UserCommon/              <-- Common implementation files (namespace user_common_207610130_215664087)
-│   ├── include/UserCommon/  <-- Map3DImpl.h, MockGPS.h, MockLidar.h, MockMovement.h, DroneControlImpl.h, etc.
-│   └── src/                 <-- Component source implementations
-│
-├── Algorithm/               <-- Mapping Algorithm Shared Library Target
-│   ├── CMakeLists.txt       <-- Builds Algorithm_207610130_215664087.so (independent build)
-│   ├── include/Algorithm/   <-- MappingAlgorithmImpl_207610130_215664087.h (namespace algorithm_207610130_215664087)
+├── Algorithm/               <-- Mapping Algorithm Shared Library Target (namespace algorithm_207610130_215664087)
+│   ├── CMakeLists.txt       <-- Independent build for Algorithm_207610130_215664087.so
+│   ├── include/Algorithm/   <-- MappingAlgorithmImpl_207610130_215664087.h
 │   └── src/                 <-- MappingAlgorithmImpl_207610130_215664087.cpp + REGISTER_MAPPING_ALGORITHM(...)
 │
-├── MissionControl/          <-- Mission Control Shared Library Target
-│   ├── CMakeLists.txt       <-- Builds MissionControl_207610130_215664087.so (independent build)
-│   ├── include/MissionControl/ <-- MissionControlImpl_207610130_215664087.h (namespace mission_control_207610130_215664087)
-│   └── src/                 <-- MissionControlImpl_207610130_215664087.cpp + REGISTER_MISSION_CONTROL(...)
+├── MissionControl/          <-- Mission Control Shared Library Target (namespace mission_control_207610130_215664087)
+│   ├── CMakeLists.txt       <-- Independent build for MissionControl_207610130_215664087.so
+│   ├── common_mission_control/ <-- IDroneControl.h interface
+│   ├── include/MissionControl/ <-- MissionControlImpl_..., DroneControlImpl.h, ScanResultToVoxels.h
+│   └── src/                 <-- MissionControlImpl_...cpp, DroneControlImpl.cpp, ScanResultToVoxels.cpp
 │
-├── Simulator/               <-- Executable Simulation Project Target
-│   ├── CMakeLists.txt       <-- Builds simulator_207610130_215664087 executable (independent build)
-│   ├── include/Simulator/   <-- Registrar.h, DlLoader.h, ArgumentParser.h, SimulationEngine.h, ResultExporter.h
-│   └── src/                 <-- Simulator entry point and task dispatcher
+├── Simulator/               <-- Simulation Executable Target (namespace simulator_207610130_215664087)
+│   ├── CMakeLists.txt       <-- Independent build for simulator_207610130_215664087 executable
+│   ├── common_simulator/   <-- ISimulation.h, ISimulationRun.h, SimulationTypes.h
+│   ├── include/Simulator/   <-- SimulationEngine.h, Registrar.h, DlLoader.h, ResultExporter.h,
+│   │                            ConfigParser.h, Map3DImpl.h, MapsComparison.h, MockGPS.h,
+│   │                            MockLidar.h, MockMovement.h, NpyMapIO.h, ArgumentParser.h
+│   └── src/                 <-- main.cpp, SimulationEngine.cpp, Registrar.cpp, DlLoader.cpp,
+│                                ResultExporter.cpp, ConfigParser.cpp, Map3DImpl.cpp,
+│                                MapsComparison.cpp, MockGPS.cpp, MockLidar.cpp,
+│                                MockMovement.cpp, NpyMapIO.cpp, ArgumentParser.cpp
 │
-├── CMakeLists.txt           <-- Root CMake file building all 3 projects
+├── UserCommon/              <-- Shared types area (namespace user_common_207610130_215664087)
+│   └── include/UserCommon/  <-- CommonDefines.h
+│
+├── CMakeLists.txt           <-- Root CMake build orchestrator
 ├── README.md                <-- Project documentation
 └── students.txt             <-- Submitter names and IDs
 ```
@@ -62,19 +71,27 @@ ex3_207610130_215664087/
 ## Multithreading Model
 
 - Controlled by the `num_threads` command-line argument:
-  - `num_threads` omitted or `num_threads=1`: Execution runs synchronously on the main thread.
-  - `num_threads >= 2`: Spawns `<num_threads>` worker threads in addition to the main thread. The main thread joins worker completion.
+  - `num_threads` omitted or `num_threads=1`: Execution runs synchronously on the main thread (1 thread).
+  - `num_threads >= 2`: Spawns `<num_threads>` worker threads in addition to the main thread ($N+1 \ge 3$ threads).
+  - If `jobs.size() < 2`, runs synchronously on the main thread. Total running threads is **never 2**.
 - **Fine-Grained SimulationJob Queue**: Work is divided at the individual simulation run level (`simulation × mission × drone × lidar` Cartesian specs) across all tested plugins.
-- Worker threads pull from an atomic job index counter, ensuring full thread utilization even when testing a single plugin across multiple scenarios.
-- The simulator never spawns idle worker threads if the total number of jobs is smaller than `num_threads`.
+- Worker threads pull from an atomic job index counter, ensuring full thread utilization without locking during run execution.
 
 ---
 
-## Error Handling & Logging
+## Physical Simulation & Swept Collision Detection
+
+- **Full Building Hidden Map**: Physical boundaries of the ground-truth hidden map are calculated from the full dimensions of the input NumPy array ($\text{dimensions} \times \text{resolution} - \text{offset}$), enabling the hidden world to cover the entire building while `output_map` is bounded by `mission_bounds`.
+- **Mandatory Swept Volume Collision Checking**: In `MockMovement`, trajectory advancement and vertical elevation step through the path in sub-voxel increments, testing both the center voxel and the drone's spherical radius against the hidden map to detect any physical wall collisions.
+
+---
+
+## Error Handling & Reports
 
 - **Error Continuation**: If a single simulation run encounters an error, it is recorded with `score = -1.0` and `status = "error"`, and the simulator proceeds to execute all subsequent runs.
 - **Immediate Error Logging**: Errors are logged immediately to `error_log.txt` under a thread-safe mutex and flushed.
 - **Verbose Mode (`-verbose`)**: Creates dedicated `_verbose.log` files with step-by-step telemetry on disk for each mission run.
+- **Assignment-2 `score_report` Schema**: Per-SO reports emit the exact hierarchical `score_report:` YAML schema with summary statistics and simulation/mission/run trees.
 
 ---
 

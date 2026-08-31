@@ -3,30 +3,27 @@
  * @brief Multi-threaded simulation orchestrator for Comparative and Competitive runs.
  *
  * Key design decisions:
- * - All .so files are pre-loaded ONCE on the main thread before worker threads start.
- * - Flat simulation job table: Work is divided at the individual simulation run level
- *   (Cartesian specs) so all requested worker threads are utilized.
- * - Thread count compliance: When jobs.size() < 2 or num_threads <= 1, runs on main thread;
- *   otherwise spawns N workers. Total threads is NEVER 2.
- * - Strict .so lifetime safety: All instantiated algorithm and mission control objects,
- *   factory variables, and options are destroyed BEFORE dlclose/unload is executed.
- * - Resolution factor: Based on mission_config.gps_resolution; if < 1, logs error and
- *   sets status IGNORED_TOO_SMALL.
- * - Non-stopping error model: An error in one run logs immediately and records score -1.0,
- *   without aborting the remaining simulation runs.
+ * - Module architecture matches Structuring the project.pdf: all simulation mocks,
+ *   hidden map processing, and result evaluation live inside the Simulator module.
+ * - Hidden map boundaries derived from NPY dimensions * resolution - offset (covering full building).
+ * - Output map boundaries configured to mission_bounds.
+ * - MockMovement performs swept volume trajectory collision checks using drone radius.
+ * - Resolution factor calculation based on mission_config.gps_resolution.
+ * - Thread count compliance: total running threads is NEVER 2.
+ * - Strict lifetime cleanup: all instantiated objects and stack factory references are
+ *   destroyed/reset before dlclose() is invoked.
  */
 
 #include <Simulator/SimulationEngine.h>
 #include <Simulator/DlLoader.h>
 #include <Simulator/ResultExporter.h>
-
-#include <UserCommon/ConfigParser.h>
-#include <UserCommon/Map3DImpl.h>
-#include <UserCommon/MapsComparison.h>
-#include <UserCommon/MockGPS.h>
-#include <UserCommon/MockLidar.h>
-#include <UserCommon/MockMovement.h>
-#include <UserCommon/NpyMapIO.h>
+#include <Simulator/ConfigParser.h>
+#include <Simulator/Map3DImpl.h>
+#include <Simulator/MapsComparison.h>
+#include <Simulator/MockGPS.h>
+#include <Simulator/MockLidar.h>
+#include <Simulator/MockMovement.h>
+#include <Simulator/NpyMapIO.h>
 
 #include <yaml-cpp/yaml.h>
 
@@ -47,10 +44,11 @@ namespace simulator_207610130_215664087 {
 
 namespace {
 
-using namespace user_common_207610130_215664087;
+/// Discovers all .so files in a folder matching prefix, sorted by path.
+std::vector<std::filesystem::path> discoverSoFiles(
+    const std::filesystem::path& folder,
+    const std::string& expected_prefix = "") {
 
-/// Discovers all .so files in a folder, sorted by path.
-std::vector<std::filesystem::path> discoverSoFiles(const std::filesystem::path& folder) {
     std::vector<std::filesystem::path> files;
     try {
         if (!std::filesystem::is_directory(folder)) {
@@ -58,7 +56,10 @@ std::vector<std::filesystem::path> discoverSoFiles(const std::filesystem::path& 
         }
         for (const auto& entry : std::filesystem::directory_iterator(folder)) {
             if (entry.is_regular_file() && entry.path().extension() == ".so") {
-                files.push_back(entry.path());
+                const std::string filename = entry.path().filename().string();
+                if (expected_prefix.empty() || filename.rfind(expected_prefix, 0) == 0) {
+                    files.push_back(entry.path());
+                }
             }
         }
     } catch (...) {
@@ -160,17 +161,33 @@ SingleRunResult executeSingleRun(
     result.output_map_file = run_output_file;
 
     try {
-        // --- Load ground truth (hidden) map from .npy file ---
+        // --- 1. Load and validate ground truth (hidden) map ---
         auto hidden_map_data = loadNormalizedNpyMap(spec.simulation_config.map_filename);
+        NpyMapShape hidden_shape = npyMapShape(*hidden_map_data, spec.simulation_config.map_filename);
 
+        // Derive hidden map physical boundaries from NPY array dimensions (covers full building)
+        const double map_res_cm = spec.simulation_config.map_resolution.force_numerical_value_in(cm);
+        const double full_width_cm = static_cast<double>(hidden_shape.dim_x) * map_res_cm;
+        const double full_length_cm = static_cast<double>(hidden_shape.dim_y) * map_res_cm;
+        const double full_height_cm = static_cast<double>(hidden_shape.dim_z) * map_res_cm;
+
+        const double offset_x = spec.simulation_config.map_axes_offset.x.force_numerical_value_in(cm);
+        const double offset_y = spec.simulation_config.map_axes_offset.y.force_numerical_value_in(cm);
+        const double offset_z = spec.simulation_config.map_axes_offset.z.force_numerical_value_in(cm);
+
+        common::types::MappingBounds full_map_bounds{
+            Interval{-offset_x * x_extent[cm], (full_width_cm - offset_x) * x_extent[cm]},
+            Interval{-offset_y * y_extent[cm], (full_length_cm - offset_y) * y_extent[cm]},
+            Interval{-offset_z * z_extent[cm], (full_height_cm - offset_z) * z_extent[cm]}
+        };
         common::types::MapConfig hidden_map_config{
-            spec.mission_config.mission_bounds,
+            full_map_bounds,
             spec.simulation_config.map_axes_offset,
             spec.simulation_config.map_resolution
         };
         Map3DImpl hidden_map(hidden_map_data, hidden_map_config);
 
-        // --- Output mapping resolution based on GPS resolution ---
+        // --- 2. Output mapping resolution based on GPS resolution ---
         const double factor = spec.mission_config.output_mapping_resolution_factor;
         common::PhysicalLength output_resolution;
 
@@ -188,15 +205,20 @@ SingleRunResult executeSingleRun(
         }
         result.resolution_cm = output_resolution.force_numerical_value_in(cm);
 
-        // Compute output voxel dimensions relative to physical space
-        NpyMapShape hidden_shape = npyMapShape(*hidden_map_data, spec.simulation_config.map_filename);
-        const double map_res_cm = spec.simulation_config.map_resolution.force_numerical_value_in(cm);
+        // Derive output map voxel grid dimensions from mission_bounds and output_resolution
         const double out_res_cm = result.resolution_cm > 0.0 ? result.resolution_cm : 10.0;
+        const double mb_x_len = spec.mission_config.mission_bounds.x.max.force_numerical_value_in(cm) -
+                                spec.mission_config.mission_bounds.x.min.force_numerical_value_in(cm);
+        const double mb_y_len = spec.mission_config.mission_bounds.y.max.force_numerical_value_in(cm) -
+                                spec.mission_config.mission_bounds.y.min.force_numerical_value_in(cm);
+        const double mb_z_len = spec.mission_config.mission_bounds.z.max.force_numerical_value_in(cm) -
+                                spec.mission_config.mission_bounds.z.min.force_numerical_value_in(cm);
 
-        NpyMapShape output_shape;
-        output_shape.dim_x = static_cast<std::size_t>(std::max(1.0, std::ceil(hidden_shape.dim_x * map_res_cm / out_res_cm)));
-        output_shape.dim_y = static_cast<std::size_t>(std::max(1.0, std::ceil(hidden_shape.dim_y * map_res_cm / out_res_cm)));
-        output_shape.dim_z = static_cast<std::size_t>(std::max(1.0, std::ceil(hidden_shape.dim_z * map_res_cm / out_res_cm)));
+        NpyMapShape output_shape{
+            static_cast<std::size_t>(std::max(1.0, std::ceil(mb_x_len / out_res_cm))),
+            static_cast<std::size_t>(std::max(1.0, std::ceil(mb_y_len / out_res_cm))),
+            static_cast<std::size_t>(std::max(1.0, std::ceil(mb_z_len / out_res_cm)))
+        };
 
         auto output_map_data = makeFilledIntNpyArray(
             output_shape,
@@ -209,15 +231,15 @@ SingleRunResult executeSingleRun(
         };
         Map3DImpl output_map(output_map_data, output_map_config);
 
-        // --- Hardware mocks ---
+        // --- 3. Hardware mocks ---
         MockGPS gps(spec.simulation_config.initial_drone_position,
                     Orientation{spec.simulation_config.initial_angle,
                                 0.0 * altitude_angle[deg]},
                     spec.mission_config.gps_resolution);
-        MockMovement movement(gps, &hidden_map);
+        MockMovement movement(gps, &hidden_map, spec.drone_config.radius);
         MockLidar lidar(spec.lidar_config, hidden_map, gps);
 
-        // --- Instantiate Algorithm and MissionControl from pre-loaded factories ---
+        // --- 4. Instantiate Algorithm and MissionControl from pre-loaded factories ---
         common::MappingAlgorithmDependencies algo_deps{
             spec.mission_config,
             spec.lidar_config,
@@ -239,7 +261,7 @@ SingleRunResult executeSingleRun(
         };
         auto mission_control = mc_factory(std::move(mc_deps));
 
-        // --- Run the mission ---
+        // --- 5. Run the mission ---
         common::types::MissionRunResult run_res = mission_control->runMission();
         result.steps = run_res.steps;
         result.status = statusToString(run_res.status);
@@ -262,7 +284,7 @@ SingleRunResult executeSingleRun(
             return result;
         }
 
-        // --- Score the output map vs the hidden map ---
+        // --- 6. Score the output map vs the hidden map ---
         std::vector<common::IMap3D*> targets{&output_map};
         std::vector<double> scores = MapsComparison::compare(hidden_map, targets);
         result.score = scores.empty() ? 0.0 : scores[0];
@@ -341,7 +363,10 @@ bool SimulationEngine::run() {
 // Comparative mode
 // ─────────────────────────────────────────────────────────────────────────────
 bool SimulationEngine::runComparative() {
-    auto mc_files = discoverSoFiles(args_.mission_control_folder);
+    auto mc_files = discoverSoFiles(args_.mission_control_folder, "MissionControl");
+    if (mc_files.empty()) {
+        mc_files = discoverSoFiles(args_.mission_control_folder);
+    }
     if (mc_files.empty()) {
         std::cerr << "Error: No .so files found in: "
                   << args_.mission_control_folder.string() << "\n";
@@ -560,7 +585,10 @@ bool SimulationEngine::runComparative() {
 // Competitive mode
 // ─────────────────────────────────────────────────────────────────────────────
 bool SimulationEngine::runCompetitive() {
-    auto algo_files = discoverSoFiles(args_.algorithms_folder);
+    auto algo_files = discoverSoFiles(args_.algorithms_folder, "Algorithm");
+    if (algo_files.empty()) {
+        algo_files = discoverSoFiles(args_.algorithms_folder);
+    }
     if (algo_files.empty()) {
         std::cerr << "Error: No .so files found in: "
                   << args_.algorithms_folder.string() << "\n";

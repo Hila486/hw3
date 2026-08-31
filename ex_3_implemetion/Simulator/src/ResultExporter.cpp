@@ -114,7 +114,6 @@ void ResultExporter::exportComparativeReport(
     const std::vector<ComparativeManagerResult>& manager_results,
     const std::vector<std::string>& error_managers) {
 
-    // Group managers by matching run-by-run results signature
     std::map<ManagerRunSignature, std::vector<std::string>> groups_map;
     for (const auto& res : manager_results) {
         ManagerRunSignature sig;
@@ -131,7 +130,6 @@ void ResultExporter::exportComparativeReport(
         groups.push_back(ComparativeGroupResult{managers, sig.total_score, sig.total_steps});
     }
 
-    // Sort by number of agreeing managers descending, then by score descending, then by steps ascending
     std::sort(groups.begin(), groups.end(), [](const ComparativeGroupResult& a, const ComparativeGroupResult& b) {
         if (a.agreeing_managers.size() != b.agreeing_managers.size()) {
             return a.agreeing_managers.size() > b.agreeing_managers.size();
@@ -183,7 +181,6 @@ void ResultExporter::exportCompetitiveReport(
     const std::vector<std::string>& error_algorithms) {
 
     std::vector<CompetitiveAlgoResult> sorted_results = algo_results;
-    // Sort by score descending, then by steps ascending
     std::sort(sorted_results.begin(), sorted_results.end(), [](const CompetitiveAlgoResult& a, const CompetitiveAlgoResult& b) {
         if (std::abs(a.total_score - b.total_score) > 1.0e-6) {
             return a.total_score > b.total_score;
@@ -241,7 +238,7 @@ void ResultExporter::exportPerSoReport(
     out << "  score_range:\n";
     out << "    min: 0\n";
     out << "    max: 100\n";
-    out << "  error_score: -1\n";
+    out << "    error_score: -1\n";
     out << "  summary:\n";
     out << "    total_runs: " << summary.total_runs << "\n";
     out << "    scored_runs: " << summary.scored_runs << "\n";
@@ -276,7 +273,6 @@ void ResultExporter::exportPerSoReport(
                 out << "              status: \"" << run.status << "\"\n";
                 out << "              steps: " << run.steps << "\n";
                 out << "              score: " << run.score << "\n";
-                out << "              output_map: \"" << run.output_map_file.filename().string() << "\"\n";
                 if (!run.error_code.empty()) {
                     out << "              error_ref:\n";
                     out << "                code: \"" << run.error_code << "\"\n";

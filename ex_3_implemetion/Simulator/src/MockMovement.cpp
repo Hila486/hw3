@@ -1,22 +1,20 @@
-#include <UserCommon/MockMovement.h>
+#include <Simulator/MockMovement.h>
 
 #include <algorithm>
 #include <cmath>
 #include <mp-units/systems/si/math.h>
 #include <stdexcept>
 
-namespace user_common_207610130_215664087 {
+namespace simulator_207610130_215664087 {
 
 namespace {
 
 constexpr double kTrigEpsilon = 1.0e-9;
 
-/// Extracts degree value from HorizontalAngle type.
 [[nodiscard]] double horizontalDegrees(HorizontalAngle angle) {
     return angle.force_numerical_value_in(deg);
 }
 
-/// Normalizes degree angle to [0, 360) range.
 [[nodiscard]] double normalizeDegrees(double degrees) {
     double normalized = std::fmod(degrees, 360.0);
     if (normalized < 0.0) {
@@ -25,28 +23,48 @@ constexpr double kTrigEpsilon = 1.0e-9;
     return normalized;
 }
 
-/// Snaps small trigonometric values close to 0 within epsilon.
 [[nodiscard]] double snapped(double value) {
     return std::abs(value) < kTrigEpsilon ? 0.0 : value;
 }
 
 } // namespace
 
-MockMovement::MockMovement(MockGPS& gps, const common::IMap3D* hidden_map)
-    : gps_(gps), hidden_map_(hidden_map) {}
+MockMovement::MockMovement(MockGPS& gps, const common::IMap3D* hidden_map, PhysicalLength drone_radius)
+    : gps_(gps), hidden_map_(hidden_map), drone_radius_(drone_radius) {}
 
 void MockMovement::checkRealMapCollision(const Position3D& position) const {
-    if (hidden_map_ != nullptr) {
-        if (hidden_map_->atVoxel(position) == common::types::VoxelOccupancy::Occupied) {
-            throw std::runtime_error("Drone collided with an occupied voxel on the actual map.");
+    if (hidden_map_ == nullptr) {
+        return;
+    }
+
+    if (hidden_map_->atVoxel(position) == common::types::VoxelOccupancy::Occupied) {
+        throw std::runtime_error("Drone collided with an occupied voxel on the actual map.");
+    }
+
+    const double radius_cm = drone_radius_.force_numerical_value_in(cm);
+    if (radius_cm > 0.0) {
+        const double r = radius_cm;
+        const Position3D probe_points[] = {
+            Position3D{position.x + r * x_extent[cm], position.y, position.z},
+            Position3D{position.x - r * x_extent[cm], position.y, position.z},
+            Position3D{position.x, position.y + r * y_extent[cm], position.z},
+            Position3D{position.x, position.y - r * y_extent[cm], position.z},
+            Position3D{position.x, position.y, position.z + r * z_extent[cm]},
+            Position3D{position.x, position.y, position.z - r * z_extent[cm]}
+        };
+
+        for (const auto& probe : probe_points) {
+            if (hidden_map_->atVoxel(probe) == common::types::VoxelOccupancy::Occupied) {
+                throw std::runtime_error("Drone collided with an occupied voxel on the actual map.");
+            }
         }
     }
 }
 
-/**
- * @brief Rotates drone left or right and updates simulated GPS heading.
- */
-common::types::MovementResult MockMovement::rotate(common::types::RotationDirection direction, HorizontalAngle angle) {
+common::types::MovementResult MockMovement::rotate(
+    common::types::RotationDirection direction,
+    HorizontalAngle angle) {
+
     const Orientation current = gps_.heading();
     const HorizontalAngle signed_angle =
         (direction == common::types::RotationDirection::Left) ? angle : -angle;
@@ -58,9 +76,6 @@ common::types::MovementResult MockMovement::rotate(common::types::RotationDirect
     return common::types::MovementResult{true, {}};
 }
 
-/**
- * @brief Advances drone forward in 2D horizontal direction with full swept path collision checking.
- */
 common::types::MovementResult MockMovement::advance(PhysicalLength distance) {
     const Position3D current_pos = gps_.position();
     const Orientation heading = gps_.heading();
@@ -81,7 +96,9 @@ common::types::MovementResult MockMovement::advance(PhysicalLength distance) {
     if (hidden_map_ != nullptr) {
         step_size_cm = std::max(0.5, hidden_map_->getMapConfig().resolution.force_numerical_value_in(cm) * 0.5);
     }
-    const std::size_t num_samples = std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil(std::abs(distance_cm) / step_size_cm)));
+    const std::size_t num_samples = std::max<std::size_t>(
+        1, static_cast<std::size_t>(std::ceil(std::abs(distance_cm) / step_size_cm)));
+
     for (std::size_t i = 1; i <= num_samples; ++i) {
         const double frac = static_cast<double>(i) / static_cast<double>(num_samples);
         Position3D sample_pos{
@@ -96,9 +113,6 @@ common::types::MovementResult MockMovement::advance(PhysicalLength distance) {
     return common::types::MovementResult{true, {}};
 }
 
-/**
- * @brief Elevates drone vertically with full swept path collision checking.
- */
 common::types::MovementResult MockMovement::elevate(PhysicalLength distance) {
     const Position3D current_pos = gps_.position();
     const double distance_cm = distance.force_numerical_value_in(cm);
@@ -113,7 +127,9 @@ common::types::MovementResult MockMovement::elevate(PhysicalLength distance) {
     if (hidden_map_ != nullptr) {
         step_size_cm = std::max(0.5, hidden_map_->getMapConfig().resolution.force_numerical_value_in(cm) * 0.5);
     }
-    const std::size_t num_samples = std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil(std::abs(distance_cm) / step_size_cm)));
+    const std::size_t num_samples = std::max<std::size_t>(
+        1, static_cast<std::size_t>(std::ceil(std::abs(distance_cm) / step_size_cm)));
+
     for (std::size_t i = 1; i <= num_samples; ++i) {
         const double frac = static_cast<double>(i) / static_cast<double>(num_samples);
         Position3D sample_pos{
@@ -128,4 +144,4 @@ common::types::MovementResult MockMovement::elevate(PhysicalLength distance) {
     return common::types::MovementResult{true, {}};
 }
 
-} // namespace user_common_207610130_215664087
+} // namespace simulator_207610130_215664087

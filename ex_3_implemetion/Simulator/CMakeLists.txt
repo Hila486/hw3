@@ -19,22 +19,18 @@ add_executable(simulator_207610130_215664087
     src/Registrar.cpp
     src/ResultExporter.cpp
     src/SimulationEngine.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/src/Map3DImpl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/src/MockGPS.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/src/MockMovement.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/src/MockLidar.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/src/DroneControlImpl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/src/ScanResultToVoxels.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/src/ConfigParser.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/src/NpyMapIO.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/src/MapsComparison.cpp
+    src/ConfigParser.cpp
+    src/Map3DImpl.cpp
+    src/MapsComparison.cpp
+    src/MockGPS.cpp
+    src/MockLidar.cpp
+    src/MockMovement.cpp
+    src/NpyMapIO.cpp
 )
 
 target_include_directories(simulator_207610130_215664087 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/common_simulator/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../MissionControl/common_mission_control/include
 )
 
 target_link_libraries(simulator_207610130_215664087 PRIVATE
