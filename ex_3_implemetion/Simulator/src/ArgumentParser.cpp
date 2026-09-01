@@ -179,19 +179,13 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
         args.num_threads = threads;
     }
 
-    // Validate simulation config file
+    // Check all mandatory arguments for the selected mode
+    std::vector<std::string> missing_args;
     if (!kv_args.count("simulation")) {
-        last_error_ = formatErrorWithUsage("Error: Missing mandatory argument 'simulation=<file.yaml>'.");
-        return std::nullopt;
-    }
-    args.simulation_file = kv_args["simulation"];
-    if (!canOpenFile(args.simulation_file)) {
-        last_error_ = formatErrorWithUsage("Error: Simulation file does not exist or cannot be opened: " + args.simulation_file.string());
-        return std::nullopt;
+        missing_args.push_back("simulation=<file.yaml>");
     }
 
     if (args.mode == ExecutionMode::Comparative) {
-        std::vector<std::string> missing_args;
         if (!kv_args.count("mission_control_folder")) {
             missing_args.push_back("mission_control_folder=<folder>");
         }
@@ -210,8 +204,14 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
             return std::nullopt;
         }
 
+        args.simulation_file = kv_args["simulation"];
         args.mission_control_folder = kv_args["mission_control_folder"];
         args.algorithm_file = kv_args["algorithm"];
+
+        if (!canOpenFile(args.simulation_file)) {
+            last_error_ = formatErrorWithUsage("Error: Simulation file does not exist or cannot be opened: " + args.simulation_file.string());
+            return std::nullopt;
+        }
 
         if (!canOpenFile(args.algorithm_file)) {
             last_error_ = formatErrorWithUsage("Error: Algorithm library file does not exist or cannot be opened: " + args.algorithm_file.string());
@@ -234,7 +234,6 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
         }
 
     } else { // Competition mode
-        std::vector<std::string> missing_args;
         if (!kv_args.count("mission_control")) {
             missing_args.push_back("mission_control=<mission_control_so>");
         }
@@ -253,8 +252,14 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
             return std::nullopt;
         }
 
+        args.simulation_file = kv_args["simulation"];
         args.mission_control_file = kv_args["mission_control"];
         args.algorithms_folder = kv_args["algorithms_folder"];
+
+        if (!canOpenFile(args.simulation_file)) {
+            last_error_ = formatErrorWithUsage("Error: Simulation file does not exist or cannot be opened: " + args.simulation_file.string());
+            return std::nullopt;
+        }
 
         if (!canOpenFile(args.mission_control_file)) {
             last_error_ = formatErrorWithUsage("Error: Mission control library file does not exist or cannot be opened: " + args.mission_control_file.string());
