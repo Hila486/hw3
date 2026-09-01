@@ -107,6 +107,14 @@ void ScanResultToVoxels::applyToMap(
         const Orientation beam_orientation = absoluteBeamOrientation(drone_heading, hit.angle);
 
         if (isZeroDistance(hit.distance)) {
+            markBeamSegment(
+                output_map,
+                scan_origin,
+                beam_orientation,
+                0.0 * cm,
+                lidar_config.z_min,
+                step,
+                common::types::VoxelOccupancy::PotentiallyOccupied);
             continue;
         }
 
