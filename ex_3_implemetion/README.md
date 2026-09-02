@@ -49,8 +49,8 @@ ex3_207610130_215664087/
 │                                MapsComparison.cpp, MockGPS.cpp, MockLidar.cpp,
 │                                MockMovement.cpp, NpyMapIO.cpp, ArgumentParser.cpp
 │
-├── UserCommon/              <-- Shared types area (namespace user_common_207610130_215664087)
-│   └── include/UserCommon/  <-- CommonDefines.h
+├── UserCommon/              <-- Shared types and utility headers (namespace user_common_207610130_215664087)
+│   └── include/UserCommon/  <-- CommonDefines.h, AngleUtils.h, GeometryUtils.h
 │
 ├── CMakeLists.txt           <-- Root CMake build orchestrator
 ├── README.md                <-- Project documentation

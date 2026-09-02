@@ -29,7 +29,10 @@ namespace simulator_207610130_215664087 {
 
 namespace {
 
-/// Discovers all .so files in a folder matching prefix, sorted by path.
+    //helper functions for SimulationEngine
+
+// Discovers all .so files in a folder matching prefix, sorted by path.
+//Return a list of filesystem paths
 std::vector<std::filesystem::path> discoverSoFiles(
     const std::filesystem::path& folder,
     const std::string& expected_prefix = "") {
@@ -54,17 +57,23 @@ std::vector<std::filesystem::path> discoverSoFiles(
     return files;
 }
 
-/// Raw filename metadata layout extracted from composition YAML.
+//small data container  to remember the original filenames from the simulation composition YAML
 struct RawCompositionLayout {
+    // Represents one simulation configuration + all the missions belonging to that simulation
     struct SimGroup {
         std::string simulation_config;
         std::vector<std::string> mission_configs;
     };
+
     std::vector<SimGroup> simulations;
     std::vector<std::string> drone_configs;
     std::vector<std::string> lidar_configs;
 };
 
+/*
+    * Reads and returns the raw layout of the simulation composition YAML file.
+    * @param filepath Path to the simulation composition YAML file.
+    */
 RawCompositionLayout readRawLayout(const std::filesystem::path& filepath) {
     RawCompositionLayout layout;
     try {
@@ -101,10 +110,11 @@ RawCompositionLayout readRawLayout(const std::filesystem::path& filepath) {
         }
     } catch (...) {
         // Handled by ConfigParser
+        //This function intentionally doesn't report the YAML parsing error.it is only helping preserve filenames.
     }
     return layout;
 }
-
+// ----------------------------------------
 /// A single (simulation × mission × drone × lidar) run specification.
 struct SingleRunSpec {
     SimulationConfigData simulation_config;

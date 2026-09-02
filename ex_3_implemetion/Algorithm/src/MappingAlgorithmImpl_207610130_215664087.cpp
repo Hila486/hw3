@@ -2,6 +2,7 @@
 
 #include <Common/IMap3D.h>
 #include <Common/MappingAlgorithmRegistration.h>
+#include <UserCommon/AngleUtils.h>
 
 #include <algorithm>
 #include <array>
@@ -9,6 +10,7 @@
 #include <optional>
 
 using algorithm_207610130_215664087::MappingAlgorithmImpl_207610130_215664087;
+using namespace user_common_207610130_215664087;
 
 // Global auto-registration macro call so that dlopen loads this factory automatically.
 REGISTER_MAPPING_ALGORITHM(MappingAlgorithmImpl_207610130_215664087);
@@ -17,55 +19,11 @@ namespace algorithm_207610130_215664087 {
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 constexpr double kEpsilonDegrees = 1.0e-6;
 constexpr double kPositionEpsilonCm = 1.0e-6;
 constexpr double kMinimumStepCm = 1.0;
 constexpr std::size_t kScanDirectionCount = 6;
 constexpr std::size_t kMaxFailedTranslations = 20000;
-
-[[nodiscard]] double physicalCm(PhysicalLength length) {
-    return length.force_numerical_value_in(cm);
-}
-
-[[nodiscard]] double xCm(XLength length) {
-    return length.force_numerical_value_in(cm);
-}
-
-[[nodiscard]] double yCm(YLength length) {
-    return length.force_numerical_value_in(cm);
-}
-
-[[nodiscard]] double zCm(ZLength length) {
-    return length.force_numerical_value_in(cm);
-}
-
-[[nodiscard]] double horizontalDegrees(HorizontalAngle angle) {
-    return angle.force_numerical_value_in(deg);
-}
-
-[[nodiscard]] double normalizeDegrees(double degrees) {
-    double normalized = std::fmod(degrees, 360.0);
-    if (normalized < 0.0) {
-        normalized += 360.0;
-    }
-    return normalized;
-}
-
-[[nodiscard]] double signedAngleDeltaDegrees(double from_degrees, double to_degrees) {
-    double delta = normalizeDegrees(to_degrees) - normalizeDegrees(from_degrees);
-    if (delta > 180.0) {
-        delta -= 360.0;
-    }
-    if (delta < -180.0) {
-        delta += 360.0;
-    }
-    return delta;
-}
-
-[[nodiscard]] double degreesToRadians(double degrees) {
-    return degrees * kPi / 180.0;
-}
 
 [[nodiscard]] bool isPositive(PhysicalLength length) {
     return physicalCm(length) > 0.0;

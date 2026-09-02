@@ -47,6 +47,7 @@ add_executable(simulator_207610130_215664087
 target_include_directories(simulator_207610130_215664087 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/common_simulator/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/include
 )
 
 target_link_libraries(simulator_207610130_215664087 PRIVATE

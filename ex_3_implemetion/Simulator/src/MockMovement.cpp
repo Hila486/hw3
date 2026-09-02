@@ -1,5 +1,7 @@
 #include <Simulator/MockMovement.h>
 
+#include <UserCommon/AngleUtils.h>
+
 #include <algorithm>
 #include <cmath>
 #include <mp-units/systems/si/math.h>
@@ -7,21 +9,11 @@
 
 namespace simulator_207610130_215664087 {
 
+using namespace user_common_207610130_215664087;
+
 namespace {
 
 constexpr double kTrigEpsilon = 1.0e-9;
-
-[[nodiscard]] double horizontalDegrees(HorizontalAngle angle) {
-    return angle.force_numerical_value_in(deg);
-}
-
-[[nodiscard]] double normalizeDegrees(double degrees) {
-    double normalized = std::fmod(degrees, 360.0);
-    if (normalized < 0.0) {
-        normalized += 360.0;
-    }
-    return normalized;
-}
 
 [[nodiscard]] double snapped(double value) {
     return std::abs(value) < kTrigEpsilon ? 0.0 : value;

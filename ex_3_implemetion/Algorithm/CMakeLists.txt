@@ -39,6 +39,7 @@ set_target_properties(Algorithm_207610130_215664087 PROPERTIES
 
 target_include_directories(Algorithm_207610130_215664087 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../UserCommon/include
 )
 
 target_link_libraries(Algorithm_207610130_215664087 PRIVATE

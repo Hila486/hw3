@@ -8,23 +8,23 @@
 namespace simulator_207610130_215664087 {
 
 /**
- * @class SimulationEngine
- * @brief Multi-threaded simulation orchestrator executing Comparative and Competitive runs.
+ * header file that declares the main class responsible for running the simulation
  */
 class SimulationEngine {
 public:
     /**
-     * @brief Constructs SimulationEngine with parsed CLI options.
+     * Constructs SimulationEngine with parsed CLI options.
      */
     explicit SimulationEngine(ParsedArgs args);
 
     /**
-     * @brief Executes the simulation batch using multi-threaded task allocation.
+     *  Executes the simulation batch using multi-threaded task allocation.
      * @return True if batch completed successfully, false on critical setup failure.
      */
     bool run();
 
 private:
+    // Helper methods for running the simulation in different modes
     bool runComparative();
     bool runCompetitive();
 

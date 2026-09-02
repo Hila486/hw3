@@ -1,6 +1,8 @@
 #include <MissionControl/DroneControlImpl.h>
 #include <MissionControl/ScanResultToVoxels.h>
 
+#include <UserCommon/AngleUtils.h>
+
 #include <algorithm>
 #include <cmath>
 #include <exception>
@@ -9,35 +11,12 @@
 
 namespace mission_control_207610130_215664087 {
 
+using namespace user_common_207610130_215664087;
+
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 constexpr double kMinimumPositiveStepCm = 1.0e-6;
 constexpr double kFallbackSafetyStepCm = 1.0;
-
-[[nodiscard]] double physicalCm(PhysicalLength length) {
-    return length.force_numerical_value_in(cm);
-}
-
-[[nodiscard]] double xCm(XLength length) {
-    return length.force_numerical_value_in(cm);
-}
-
-[[nodiscard]] double yCm(YLength length) {
-    return length.force_numerical_value_in(cm);
-}
-
-[[nodiscard]] double zCm(ZLength length) {
-    return length.force_numerical_value_in(cm);
-}
-
-[[nodiscard]] double horizontalDegrees(HorizontalAngle angle) {
-    return angle.force_numerical_value_in(deg);
-}
-
-[[nodiscard]] double degreesToRadians(double degrees) {
-    return degrees * kPi / 180.0;
-}
 
 [[nodiscard]] double squaredDistanceCm(const Position3D& a, const Position3D& b) {
     const double dx_cm = xCm(a.x) - xCm(b.x);
