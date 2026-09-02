@@ -246,7 +246,7 @@ void ResultExporter::exportPerSoReport(
     out << "  score_range:\n";
     out << "    min: 0\n";
     out << "    max: 100\n";
-    out << "    error_score: -1\n";
+    out << "  error_score: -1\n";
     out << "  summary:\n";
     out << "    total_runs: " << summary.total_runs << "\n";
     out << "    scored_runs: " << summary.scored_runs << "\n";
@@ -281,6 +281,7 @@ void ResultExporter::exportPerSoReport(
                 out << "              status: \"" << run.status << "\"\n";
                 out << "              steps: " << run.steps << "\n";
                 out << "              score: " << run.score << "\n";
+                out << "              output_map: \"" << run.output_map_file.filename().string() << "\"\n";
                 if (!run.error_code.empty()) {
                     out << "              error_ref:\n";
                     out << "                code: \"" << run.error_code << "\"\n";
