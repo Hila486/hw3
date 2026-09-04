@@ -20,6 +20,7 @@ struct SingleRunResult {
     double resolution_cm = 0.0;
     std::string resolution_request_status = "ACCEPTED";
     std::filesystem::path output_map_file{};
+    bool output_map_written = false;   // true only when the .npy file was actually saved
     std::size_t steps = 0;
     std::string status = "completed";
     double score = 0.0;

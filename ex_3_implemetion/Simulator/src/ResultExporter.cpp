@@ -290,7 +290,9 @@ void ResultExporter::exportPerSoReport(
                 out << "              status: \"" << run.status << "\"\n";
                 out << "              steps: " << run.steps << "\n";
                 out << "              score: " << run.score << "\n";
-                out << "              output_map: \"" << run.output_map_file.filename().string() << "\"\n";
+                if (run.output_map_written) {
+                    out << "              output_map: \"" << run.output_map_file.filename().string() << "\"\n";
+                }
                 if (!run.error_code.empty()) {
                     out << "              error_ref:\n";
                     out << "                code: \"" << run.error_code << "\"\n";
