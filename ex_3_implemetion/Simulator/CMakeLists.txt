@@ -35,8 +35,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Simulator uses:
 # mp-units -> strongly typed physical quantities.
 # yaml-cpp -> YAML configuration parsing.
+# Threads  -> std::thread worker pool used by the simulation engine.
 find_package(mp-units CONFIG REQUIRED)
 find_package(yaml-cpp CONFIG REQUIRED)
+find_package(Threads REQUIRED)
 
 # Import the shared common target when Simulator is built independently.
 if(NOT TARGET common::common)
@@ -90,6 +92,7 @@ target_include_directories(
 #
 # common::common  -> common interfaces and strong unit types
 # yaml-cpp        -> YAML configuration parsing
+# Threads::Threads-> pthreads backing for std::thread
 # CMAKE_DL_LIBS   -> platform dynamic-loading support used by
 #                    dlopen(), dlclose(), dlerror(), etc.
 target_link_libraries(
@@ -97,6 +100,7 @@ target_link_libraries(
     PRIVATE
     common::common
     yaml-cpp
+    Threads::Threads
     ${CMAKE_DL_LIBS}
 )
 

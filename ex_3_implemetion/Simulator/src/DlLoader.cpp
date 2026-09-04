@@ -81,8 +81,11 @@ bool DlLoader::load() {
 
     // Load the .so on Linux.
     // RTLD_NOW resolves symbols immediately.
-    // RTLD_GLOBAL makes loaded symbols available to other libraries.
-    handle_ = dlopen(library_path_.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    // RTLD_LOCAL keeps each plugin's symbols private so that loading several
+    // plugins together (e.g. many algorithms in competition mode) cannot
+    // interpose identically named global symbols across plugins. The simulator
+    // exports its own symbols via -rdynamic, so registration still resolves.
+    handle_ = dlopen(library_path_.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (handle_ == nullptr) {
         const char* err = dlerror();
         error_message_ = "dlopen failed for " + library_path_.string() + ": " +

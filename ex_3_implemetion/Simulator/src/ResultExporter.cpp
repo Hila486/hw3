@@ -59,11 +59,11 @@ Summary calculateSummary(const std::vector<SingleRunResult>& runs) {
     return summary;
 }
 
-/// Signature representing the exact run-by-run outcome for grouping agreeing managers.
+/// Signature used to group "agreeing" managers. Per the spec's Comparative report
+/// format, agreement is defined by identical total_score and total_steps.
 struct ManagerRunSignature {
     double total_score = 0.0;
     std::size_t total_steps = 0;
-    std::vector<std::tuple<std::string, std::size_t, double>> run_outcomes;
 
     bool operator<(const ManagerRunSignature& other) const {
         const long long this_score_q = static_cast<long long>(std::round(total_score * 100.0));
@@ -71,10 +71,7 @@ struct ManagerRunSignature {
         if (this_score_q != other_score_q) {
             return this_score_q > other_score_q;
         }
-        if (total_steps != other.total_steps) {
-            return total_steps < other.total_steps;
-        }
-        return run_outcomes < other.run_outcomes;
+        return total_steps < other.total_steps;
     }
 };
 
@@ -121,9 +118,6 @@ void ResultExporter::exportComparativeReport(
         ManagerRunSignature sig;
         sig.total_score = res.total_score;
         sig.total_steps = res.total_steps;
-        for (const auto& run : res.individual_runs) {
-            sig.run_outcomes.emplace_back(run.status, run.steps, run.score);
-        }
         groups_map[sig].push_back(res.manager_so_name);
     }
 
