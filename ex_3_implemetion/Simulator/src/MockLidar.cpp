@@ -115,6 +115,9 @@ PhysicalLength MockLidar::traceBeam(const Orientation& beam_orientation) const {
     const Position3D origin = gps_.position();
     // Move along the beam in small steps based on map resolution.
     const PhysicalLength step = 0.1 * hidden_map_.getMapConfig().resolution;
+    if (step <= 0.0 * cm) {
+        return std::numeric_limits<double>::max() * cm;
+    }
 
     for (PhysicalLength distance = 0.0 * cm; distance <= lidar_config_.z_max; distance += step) {
         // Calculate the point at this distance along the beam.

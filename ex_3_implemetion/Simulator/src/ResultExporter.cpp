@@ -256,17 +256,26 @@ void ResultExporter::exportPerSoReport(
     out << "    max_score: " << summary.max_score << "\n";
     out << "  simulations:\n";
 
-    // Group runs by simulation_config -> mission_config
+    // Group runs by simulation_config -> mission_config preserving composition order
+    std::vector<std::string> sim_order;
+    std::map<std::string, std::vector<std::string>> mission_order;
     std::map<std::string, std::map<std::string, std::vector<SingleRunResult>>> sim_groups;
     for (const auto& run : individual_runs) {
+        if (!sim_groups.count(run.simulation_config_name)) {
+            sim_order.push_back(run.simulation_config_name);
+        }
+        if (!sim_groups[run.simulation_config_name].count(run.mission_config_name)) {
+            mission_order[run.simulation_config_name].push_back(run.mission_config_name);
+        }
         sim_groups[run.simulation_config_name][run.mission_config_name].push_back(run);
     }
 
-    for (const auto& [sim_name, mission_map] : sim_groups) {
+    for (const auto& sim_name : sim_order) {
         out << "    - simulation_config: \"" << sim_name << "\"\n";
         out << "      missions:\n";
 
-        for (const auto& [mission_name, runs] : mission_map) {
+        for (const auto& mission_name : mission_order[sim_name]) {
+            const auto& runs = sim_groups[sim_name][mission_name];
             double res_cm = runs.empty() ? 10.0 : runs.front().resolution_cm;
             std::string res_status = runs.empty() ? "ACCEPTED" : runs.front().resolution_request_status;
 

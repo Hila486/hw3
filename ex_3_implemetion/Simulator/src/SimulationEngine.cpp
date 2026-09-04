@@ -57,6 +57,14 @@ std::vector<std::filesystem::path> discoverSoFiles(
     return files;
 }
 
+std::string getCleanDirectoryName(const std::filesystem::path& p) {
+    auto norm = p.lexically_normal();
+    if (norm.filename().empty()) {
+        norm = norm.parent_path();
+    }
+    return norm.filename().string();
+}
+
 // Stores the original filenames appearing in the composition YAML.
 // ConfigParser gives us parsed objects, while this structure preserves
 // the names needed later for reports.
@@ -325,6 +333,14 @@ SingleRunResult executeSingleRun(
     } catch (const std::exception& ex) {
         result.error_code = "EXCEPTION";
         result.error_message = std::string("Exception: ") + ex.what();
+        result.status = "error";
+        result.score = -1.0;
+        ResultExporter::logErrorImmediately(
+            output_dir,
+            "[Run " + std::to_string(spec.run_index) + "] " + result.error_message);
+    } catch (...) {
+        result.error_code = "UNKNOWN_EXCEPTION";
+        result.error_message = "Unknown non-standard exception caught during simulation run.";
         result.status = "error";
         result.score = -1.0;
         ResultExporter::logErrorImmediately(
@@ -628,7 +644,7 @@ bool SimulationEngine::runComparative() {
     ResultExporter::exportComparativeReport(
         output_dir,
         args_.simulation_file.filename().string(),
-        args_.mission_control_folder.filename().string(),
+        getCleanDirectoryName(args_.mission_control_folder),
         manager_results, error_managers);
 
     for (const auto& mgr : manager_results) {

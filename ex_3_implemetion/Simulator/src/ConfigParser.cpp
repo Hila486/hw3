@@ -118,6 +118,9 @@ common::types::DroneConfigData ConfigParser::parseDroneConfig(
     } else {
         throw std::runtime_error("Missing drone dimension/radius in " + context);
     }
+    if (radius_cm <= 0.0) {
+        throw std::runtime_error("Drone radius must be positive in " + context);
+    }
 
     const double max_rotate_deg =
         requireAnyValue<double>(config, {"max_rotate_deg", "max_rotate", "max_rotation_speed"}, context);
@@ -165,6 +168,9 @@ common::types::MissionConfigData ConfigParser::parseMissionConfig(
     mission_config.max_steps = requireValue<std::size_t>(config, "max_steps", context);
 
     const double gps_res = requireAnyValue<double>(config, {"gps_resolution_cm", "gps_resolution"}, context);
+    if (gps_res <= 0.0) {
+        throw std::runtime_error("gps_resolution_cm must be positive in " + context);
+    }
     mission_config.gps_resolution = gps_res * x_extent[cm];
 
     if (config["output_mapping_resolution_factor"]) {
@@ -225,6 +231,9 @@ SimulationConfigData ConfigParser::parseSimulationConfig(
     sim_config.map_filename = resolveRelativePath(file_path, map_file_raw);
 
     const double map_res = requireAnyValue<double>(config, {"map_resolution_cm", "map_resolution"}, context);
+    if (map_res <= 0.0) {
+        throw std::runtime_error("map_resolution_cm must be positive in " + context);
+    }
     sim_config.map_resolution = map_res * x_extent[cm];
 
     const YAML::Node offset_node = config["map_axes_offset"];
