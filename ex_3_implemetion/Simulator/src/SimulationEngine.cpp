@@ -24,15 +24,15 @@
 #include <thread>
 #include <utility>
 #include <vector>
-
 namespace simulator_207610130_215664087 {
 
 namespace {
+// -----------------------------------------------------------------------------
+// Helper functions and structures used internally by SimulationEngine.
+// -----------------------------------------------------------------------------
 
-    //helper functions for SimulationEngine
-
-// Discovers all .so files in a folder matching prefix, sorted by path.
-//Return a list of filesystem paths
+// Finds all .so files in a folder whose filename starts with the given prefix.
+// The returned paths are sorted to keep execution deterministic.
 std::vector<std::filesystem::path> discoverSoFiles(
     const std::filesystem::path& folder,
     const std::string& expected_prefix = "") {
@@ -57,9 +57,11 @@ std::vector<std::filesystem::path> discoverSoFiles(
     return files;
 }
 
-//small data container  to remember the original filenames from the simulation composition YAML
+// Stores the original filenames appearing in the composition YAML.
+// ConfigParser gives us parsed objects, while this structure preserves
+// the names needed later for reports.
 struct RawCompositionLayout {
-    // Represents one simulation configuration + all the missions belonging to that simulation
+    // One simulation configuration and its related mission configurations.
     struct SimGroup {
         std::string simulation_config;
         std::vector<std::string> mission_configs;
@@ -70,10 +72,8 @@ struct RawCompositionLayout {
     std::vector<std::string> lidar_configs;
 };
 
-/*
-    * Reads and returns the raw layout of the simulation composition YAML file.
-    * @param filepath Path to the simulation composition YAML file.
-    */
+// Reads the composition YAML only to preserve the original configuration names.
+// Actual validation/parsing is handled separately by ConfigParser.
 RawCompositionLayout readRawLayout(const std::filesystem::path& filepath) {
     RawCompositionLayout layout;
     try {
@@ -109,13 +109,14 @@ RawCompositionLayout readRawLayout(const std::filesystem::path& filepath) {
             }
         }
     } catch (...) {
-        // Handled by ConfigParser
-        //This function intentionally doesn't report the YAML parsing error.it is only helping preserve filenames.
+        // ConfigParser handles real YAML errors.
+        // This helper is only used to preserve filenames.
     }
     return layout;
 }
-// ----------------------------------------
-/// A single (simulation × mission × drone × lidar) run specification.
+
+// Describes one complete simulation run:
+// simulation × mission × drone × lidar.
 struct SingleRunSpec {
     SimulationConfigData simulation_config;
     common::types::MissionConfigData mission_config;
@@ -128,7 +129,8 @@ struct SingleRunSpec {
     std::size_t run_index = 0;
 };
 
-/// Converts MissionRunStatus to string.
+
+// Converts MissionRunStatus into text used in reports.
 std::string statusToString(common::types::MissionRunStatus status) {
     switch (status) {
         case common::types::MissionRunStatus::Completed: return "completed";
@@ -138,7 +140,9 @@ std::string statusToString(common::types::MissionRunStatus status) {
     return "error";
 }
 
-/// Executes one single simulation run using pre-loaded factories.
+
+// Executes one complete simulation scenario using already-loaded
+// Algorithm and MissionControl factories.
 SingleRunResult executeSingleRun(
     const common::MappingAlgorithmFactory& algo_factory,
     const common::MissionControlFactory& mc_factory,
@@ -148,6 +152,7 @@ SingleRunResult executeSingleRun(
     bool verbose) {
 
     SingleRunResult result;
+    // Store identifying information for the final report.
     result.run_index = spec.run_index;
     result.simulation_config_name = spec.simulation_config_name;
     result.mission_config_name = spec.mission_config_name;
@@ -156,21 +161,28 @@ SingleRunResult executeSingleRun(
     result.output_map_file = run_output_file;
 
     try {
-        // --- 1. Load and validate ground truth (hidden) map ---
+        // ---------------------------------------------------------------------
+        // 1. Load the hidden real map.
+        // This map represents the actual building and is never exposed
+        // directly to the mapping algorithm.
+        // ---------------------------------------------------------------------
         auto hidden_map_data = loadNormalizedNpyMap(spec.simulation_config.map_filename);
         validateInputMapValues(*hidden_map_data, spec.simulation_config.map_filename);
         NpyMapShape hidden_shape = npyMapShape(*hidden_map_data, spec.simulation_config.map_filename);
 
-        // Derive hidden map physical boundaries from NPY array dimensions (covers full building)
+        // Calculate the physical size represented by the NPY dimensions.
         const double map_res_cm = spec.simulation_config.map_resolution.force_numerical_value_in(cm);
         const double full_width_cm = static_cast<double>(hidden_shape.dim_x) * map_res_cm;
         const double full_length_cm = static_cast<double>(hidden_shape.dim_y) * map_res_cm;
         const double full_height_cm = static_cast<double>(hidden_shape.dim_z) * map_res_cm;
 
+        // Offsets translate between world coordinates
+        // and coordinates inside the NPY array.
         const double offset_x = spec.simulation_config.map_axes_offset.x.force_numerical_value_in(cm);
         const double offset_y = spec.simulation_config.map_axes_offset.y.force_numerical_value_in(cm);
         const double offset_z = spec.simulation_config.map_axes_offset.z.force_numerical_value_in(cm);
 
+         // Hidden map covers the complete physical building.
         common::types::MappingBounds full_map_bounds{
             -offset_x * x_extent[cm],
             (full_width_cm - offset_x) * x_extent[cm],
@@ -186,10 +198,16 @@ SingleRunResult executeSingleRun(
         };
         Map3DImpl hidden_map(hidden_map_data, hidden_map_config);
 
-        // --- 2. Output mapping resolution based on GPS resolution ---
+        
+
+        // ---------------------------------------------------------------------
+        // 2. Create the empty output map that the drone will build.
+        // ---------------------------------------------------------------------
+
         const double factor = spec.mission_config.output_mapping_resolution_factor;
         common::PhysicalLength output_resolution;
 
+        // Current implementation always uses GPS resolution.
         if (factor < 1.0) {
             result.resolution_request_status = "IGNORED TOO SMALL";
             output_resolution = spec.mission_config.gps_resolution;
@@ -207,7 +225,8 @@ SingleRunResult executeSingleRun(
         }
         result.resolution_cm = output_resolution.force_numerical_value_in(cm);
 
-        // Derive output map voxel grid dimensions matching the physical world building extent at output_resolution
+        // Calculate how many voxels are required to represent
+        // the physical map at the selected output resolution.
         const double out_res_cm = result.resolution_cm > 0.0 ? result.resolution_cm : 10.0;
         NpyMapShape output_shape{
             static_cast<std::size_t>(std::max(1.0, std::ceil(full_width_cm / out_res_cm))),
@@ -215,6 +234,7 @@ SingleRunResult executeSingleRun(
             static_cast<std::size_t>(std::max(1.0, std::ceil(full_height_cm / out_res_cm)))
         };
 
+        // Start with every voxel marked as Unmapped.
         auto output_map_data = makeFilledIntNpyArray(
             output_shape,
             static_cast<int>(common::types::VoxelOccupancy::Unmapped));
@@ -226,15 +246,22 @@ SingleRunResult executeSingleRun(
         };
         Map3DImpl output_map(output_map_data, output_map_config);
 
-        // --- 3. Hardware mocks ---
+        // ---------------------------------------------------------------------
+        // 3. Create simulated hardware.
+        // ---------------------------------------------------------------------
         MockGPS gps(spec.simulation_config.initial_drone_position,
                     Orientation{spec.simulation_config.initial_angle,
                                 0.0 * altitude_angle[deg]},
                     spec.mission_config.gps_resolution);
+        // Movement uses the hidden map only for real collision detection.
         MockMovement movement(gps, &hidden_map, spec.drone_config.radius);
+        // Lidar reads the hidden map to simulate real sensor measurements.
         MockLidar lidar(spec.lidar_config, hidden_map, gps);
 
-        // --- 4. Instantiate Algorithm and MissionControl from pre-loaded factories ---
+        
+        // ---------------------------------------------------------------------
+        // 4. Create Algorithm and MissionControl instances from factories.
+        // ---------------------------------------------------------------------
         common::MappingAlgorithmDependencies algo_deps{
             spec.mission_config,
             spec.lidar_config,
@@ -256,11 +283,14 @@ SingleRunResult executeSingleRun(
         };
         auto mission_control = mc_factory(std::move(mc_deps));
 
-        // --- 5. Run the mission ---
+        
+        // ---------------------------------------------------------------------
+        // 5. Run the complete mission.
+        // ---------------------------------------------------------------------
         common::types::MissionRunResult run_res = mission_control->runMission();
         result.steps = run_res.steps;
         result.status = statusToString(run_res.status);
-
+        // Handle mission failure.
         if (run_res.status == common::types::MissionRunStatus::Error) {
             result.score = -1.0;
             if (!run_res.errors.empty()) {
@@ -274,17 +304,21 @@ SingleRunResult executeSingleRun(
                 output_dir,
                 "[Run " + std::to_string(spec.run_index) + "] " + result.error_message);
 
+            
+            // Destroy plugin-created objects while their .so is still loaded.
             mission_control.reset();
             mapping_algorithm.reset();
             return result;
         }
 
-        // --- 6. Score the output map vs the hidden map ---
+        // ---------------------------------------------------------------------
+        // 6. Compare the produced output map with the hidden real map.
+        // ---------------------------------------------------------------------
         std::vector<common::IMap3D*> targets{&output_map};
         std::vector<double> scores = MapsComparison::compare(hidden_map, targets);
         result.score = scores.empty() ? 0.0 : scores[0];
 
-        // Explicitly destroy instances BEFORE returning
+         // Explicitly destroy plugin objects before library unloading.
         mission_control.reset();
         mapping_algorithm.reset();
 
@@ -301,7 +335,9 @@ SingleRunResult executeSingleRun(
     return result;
 }
 
-/// Pre-loads a .so file and logs errors immediately. Returns nullptr on failure.
+
+// Loads one .so before worker threads start.
+// Errors are written immediately to the output directory.
 std::unique_ptr<DlLoader> preloadLibrary(
     const std::filesystem::path& so_path,
     const std::filesystem::path& output_dir) {
@@ -316,7 +352,8 @@ std::unique_ptr<DlLoader> preloadLibrary(
     return loader;
 }
 
-/// Creates a unique collision-free output directory.
+// Creates a new output directory with a timestamp.
+// If the name already exists, a numeric suffix is added.
 std::filesystem::path createUniqueOutputDir(
     const std::filesystem::path& parent_dir,
     const std::string& prefix) {
@@ -339,6 +376,7 @@ std::filesystem::path createUniqueOutputDir(
                   << output_dir.string() << " (" << ec.message() << ")\n";
         return {};
     }
+    // Create an empty error log immediately.
     {
         std::ofstream init_log(output_dir / "error_log.txt");
     }
@@ -347,8 +385,10 @@ std::filesystem::path createUniqueOutputDir(
 
 } // namespace
 
+// Stores the command-line arguments used to configure the simulation.
 SimulationEngine::SimulationEngine(ParsedArgs args) : args_(std::move(args)) {}
 
+// Selects which simulation mode to run.
 bool SimulationEngine::run() {
     if (args_.mode == ExecutionMode::Comparative) {
         return runComparative();
@@ -357,17 +397,20 @@ bool SimulationEngine::run() {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Comparative mode
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
+// COMPARATIVE MODE
+//
+// One Algorithm is tested with multiple MissionControl implementations.
+// =============================================================================
 bool SimulationEngine::runComparative() {
+    // Find all MissionControl plugins.
     const auto mc_files = discoverSoFiles(args_.mission_control_folder, "MissionControl");
     if (mc_files.empty()) {
         std::cerr << "Error: No MissionControl*.so files found in: "
                   << args_.mission_control_folder.string() << "\n";
         return false;
     }
-
+    // Parse all simulation, mission, drone and lidar configurations.
     SimulationCompositionData composition;
     try {
         composition = ConfigParser::parseSimulationComposition(args_.simulation_file);
@@ -375,15 +418,21 @@ bool SimulationEngine::runComparative() {
         std::cerr << "Error parsing composition file: " << ex.what() << "\n";
         return false;
     }
-
+    // Preserve original YAML filenames for the reports.
     const RawCompositionLayout raw_layout = readRawLayout(args_.simulation_file);
 
+    // Create directory for all comparative-mode results.
     const std::filesystem::path output_dir =
         createUniqueOutputDir(args_.mission_control_folder, "comparative_results");
     if (output_dir.empty()) {
         return false;
     }
 
+    // -------------------------------------------------------------------------
+    // Build every simulation combination.
+    //
+    // simulation × mission × drone × lidar
+    // -------------------------------------------------------------------------
     std::vector<SingleRunSpec> run_specs;
     std::size_t current_run_idx = 0;
 
@@ -430,9 +479,17 @@ bool SimulationEngine::runComparative() {
         return false;
     }
 
-    // ── Pre-load all .so files on the main thread ──────────────────────────
+    
+
+    // -------------------------------------------------------------------------
+    // Pre-load plugins on the main thread.
+    //
+    // Dynamic loading and registration happen before worker threads begin.
+    // -------------------------------------------------------------------------
+
     std::vector<std::string> error_managers;
 
+     // Load the single Algorithm used for every comparative run.
     auto algo_loader = preloadLibrary(args_.algorithm_file, output_dir);
     if (!algo_loader) {
         std::cerr << "Error: Failed to load algorithm .so.\n";
@@ -445,12 +502,15 @@ bool SimulationEngine::runComparative() {
     }
     common::MappingAlgorithmFactory algo_factory = *algo_factory_opt;
 
+    // Stores each loaded MissionControl together with its factory.
     struct PreloadedMC {
         std::string so_name;
         std::unique_ptr<DlLoader> loader;
         common::MissionControlFactory factory;
     };
     std::vector<PreloadedMC> preloaded_mcs;
+
+    // Load all MissionControl plugins.
     for (const auto& mc_path : mc_files) {
         auto mc_loader = preloadLibrary(mc_path, output_dir);
         if (!mc_loader) {
@@ -479,7 +539,12 @@ bool SimulationEngine::runComparative() {
         return false;
     }
 
-    // ── Build fine-grained flat job table: MC × run_spec ────────────────────
+    // -------------------------------------------------------------------------
+    // Build the parallel job table.
+    //
+    // Every job = one MissionControl × one simulation specification.
+    // -------------------------------------------------------------------------
+
     struct SimulationJob {
         std::size_t mc_idx;
         std::size_t spec_idx;
@@ -493,14 +558,17 @@ bool SimulationEngine::runComparative() {
             jobs.push_back(SimulationJob{m, s, jobs.size() + 1});
         }
     }
-
+    // Each MissionControl gets a result for every run specification.
     std::vector<std::vector<SingleRunResult>> all_results(
         preloaded_mcs.size(), std::vector<SingleRunResult>(run_specs.size()));
 
+     // Shared atomic counter used by threads to claim jobs safely.
     std::atomic<std::size_t> next_job_idx{0};
 
+      // Worker repeatedly claims one job and executes it.
     auto worker = [&]() {
         while (true) {
+             // fetch_add atomically gives each thread a unique job index.
             const std::size_t idx = next_job_idx.fetch_add(1);
             if (idx >= jobs.size()) {
                 break;
@@ -510,18 +578,21 @@ bool SimulationEngine::runComparative() {
             const auto& mc = preloaded_mcs[job.mc_idx];
             const auto& spec = run_specs[job.spec_idx];
 
+            // Each simulation writes to its own output map file.
             std::ostringstream oss;
             oss << "output_map_" << mc.so_name << "_run_" << spec.run_index << ".npy";
             const std::filesystem::path run_file = output_dir / oss.str();
 
             SingleRunResult run_res = executeSingleRun(
                 algo_factory, mc.factory, spec, run_file, output_dir, args_.verbose);
-
+            // Each job owns a unique result slot.
             all_results[job.mc_idx][job.spec_idx] = std::move(run_res);
         }
     };
 
-    // ── Launch worker threads (Total threads is NEVER 2) ───────────────────
+    // -------------------------------------------------------------------------
+    // Execute jobs using either the current thread or worker threads.
+    // -------------------------------------------------------------------------
     if (args_.num_threads <= 1 || jobs.size() < 2) {
         worker();
     } else {
@@ -531,12 +602,15 @@ bool SimulationEngine::runComparative() {
         for (std::size_t i = 0; i < thread_count; ++i) {
             threads.emplace_back(worker);
         }
+        // Wait until every worker finishes.
         for (auto& t : threads) {
             t.join();
         }
     }
 
-    // ── Aggregate results per manager ──────────────────────────────────────
+    // -------------------------------------------------------------------------
+    // Combine all individual runs into one result per MissionControl.
+    // -------------------------------------------------------------------------
     std::vector<ComparativeManagerResult> manager_results;
     for (std::size_t m = 0; m < preloaded_mcs.size(); ++m) {
         ComparativeManagerResult mgr_result;
@@ -550,7 +624,7 @@ bool SimulationEngine::runComparative() {
         manager_results.push_back(std::move(mgr_result));
     }
 
-    // ── Export all reports ─────────────────────────────────────────────────
+    // Export comparative summary and individual reports.
     ResultExporter::exportComparativeReport(
         output_dir,
         args_.simulation_file.filename().string(),
@@ -564,7 +638,11 @@ bool SimulationEngine::runComparative() {
             mgr.individual_runs);
     }
 
-    // ── Strict Lifetime Cleanup: Reset all factory references BEFORE dlclose
+    // -------------------------------------------------------------------------
+    // Cleanup.
+    //
+    // Factory objects are destroyed before their shared libraries are unloaded.
+    // -------------------------------------------------------------------------
     for (auto& mc : preloaded_mcs) {
         mc.factory = nullptr;
     }
@@ -578,10 +656,13 @@ bool SimulationEngine::runComparative() {
     return true;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Competitive mode
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
+// COMPETITIVE MODE
+//
+// One MissionControl is used to compare multiple Algorithm implementations.
+// =============================================================================
 bool SimulationEngine::runCompetitive() {
+    // Find all Algorithm plugins.
     const auto algo_files = discoverSoFiles(args_.algorithms_folder, "Algorithm");
     if (algo_files.empty()) {
         std::cerr << "Error: No Algorithm*.so files found in: "
@@ -589,6 +670,7 @@ bool SimulationEngine::runCompetitive() {
         return false;
     }
 
+    // Parse all simulation configurations.
     SimulationCompositionData composition;
     try {
         composition = ConfigParser::parseSimulationComposition(args_.simulation_file);
@@ -598,13 +680,15 @@ bool SimulationEngine::runCompetitive() {
     }
 
     const RawCompositionLayout raw_layout = readRawLayout(args_.simulation_file);
-
+     // Create competition output directory.
     const std::filesystem::path output_dir =
         createUniqueOutputDir(args_.algorithms_folder, "competition");
     if (output_dir.empty()) {
         return false;
     }
-
+    // -------------------------------------------------------------------------
+    // Build all simulation × mission × drone × lidar combinations.
+    // -------------------------------------------------------------------------
     std::vector<SingleRunSpec> run_specs;
     std::size_t current_run_idx = 0;
 
@@ -651,9 +735,12 @@ bool SimulationEngine::runCompetitive() {
         return false;
     }
 
-    // ── Pre-load all .so files on the main thread ──────────────────────────
+    // -------------------------------------------------------------------------
+    // Load the single MissionControl and all Algorithm plugins.
+    // -------------------------------------------------------------------------
     std::vector<std::string> error_algorithms;
 
+    // Fixed MissionControl used by all algorithms.
     auto mc_loader = preloadLibrary(args_.mission_control_file, output_dir);
     if (!mc_loader) {
         std::cerr << "Error: Failed to load mission control .so.\n";
@@ -666,12 +753,14 @@ bool SimulationEngine::runCompetitive() {
     }
     common::MissionControlFactory mc_factory = *mc_factory_opt;
 
+    // Keeps every Algorithm library alive together with its factory.
     struct PreloadedAlgo {
         std::string so_name;
         std::unique_ptr<DlLoader> loader;
         common::MappingAlgorithmFactory factory;
     };
     std::vector<PreloadedAlgo> preloaded_algos;
+    // Load every Algorithm plugin.
     for (const auto& algo_path : algo_files) {
         auto algo_loader = preloadLibrary(algo_path, output_dir);
         if (!algo_loader) {
@@ -700,7 +789,13 @@ bool SimulationEngine::runCompetitive() {
         return false;
     }
 
-    // ── Build fine-grained flat job table: Algorithm × run_spec ─────────────
+    
+    // -------------------------------------------------------------------------
+    // Build job table:
+    //
+    // Algorithm × run specification
+    // -------------------------------------------------------------------------
+
     struct SimulationJob {
         std::size_t algo_idx;
         std::size_t spec_idx;
@@ -718,8 +813,10 @@ bool SimulationEngine::runCompetitive() {
     std::vector<std::vector<SingleRunResult>> all_results(
         preloaded_algos.size(), std::vector<SingleRunResult>(run_specs.size()));
 
+    // Atomic counter distributes jobs safely between threads.
     std::atomic<std::size_t> next_job_idx{0};
 
+     // Worker executes simulation jobs until all jobs are claimed.
     auto worker = [&]() {
         while (true) {
             const std::size_t idx = next_job_idx.fetch_add(1);
@@ -742,7 +839,7 @@ bool SimulationEngine::runCompetitive() {
         }
     };
 
-    // ── Launch worker threads (Total threads is NEVER 2) ───────────────────
+    // Execute all jobs.
     if (args_.num_threads <= 1 || jobs.size() < 2) {
         worker();
     } else {
@@ -752,11 +849,16 @@ bool SimulationEngine::runCompetitive() {
         for (std::size_t i = 0; i < thread_count; ++i) {
             threads.emplace_back(worker);
         }
+        // Wait for all simulation workers to finish.
         for (auto& t : threads) {
             t.join();
         }
     }
 
+    
+    // -------------------------------------------------------------------------
+    // Aggregate individual runs into one result per Algorithm.
+    // -------------------------------------------------------------------------
     std::vector<CompetitiveAlgoResult> algo_results;
     for (std::size_t a = 0; a < preloaded_algos.size(); ++a) {
         CompetitiveAlgoResult algo_result;
@@ -769,7 +871,7 @@ bool SimulationEngine::runCompetitive() {
         }
         algo_results.push_back(std::move(algo_result));
     }
-
+    // Export competition reports.
     ResultExporter::exportCompetitiveReport(
         output_dir,
         args_.simulation_file.filename().string(),
@@ -783,7 +885,9 @@ bool SimulationEngine::runCompetitive() {
             algo.individual_runs);
     }
 
-    // ── Strict Lifetime Cleanup: Reset all factory references BEFORE dlclose
+    // -------------------------------------------------------------------------
+    // Cleanup factories before unloading their shared libraries.
+    // -------------------------------------------------------------------------
     for (auto& algo : preloaded_algos) {
         algo.factory = nullptr;
     }

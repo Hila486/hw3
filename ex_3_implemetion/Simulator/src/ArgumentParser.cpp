@@ -1,14 +1,14 @@
 #include <Simulator/ArgumentParser.h>
 
-#include <cctype>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <set>
-#include <sstream>
-#include <string>
-#include <unordered_map>
-#include <vector>
+#include <cctype>   // used for std::isdigit
+#include <filesystem> // used for std::filesystem::path
+#include <fstream>  // used for std::ifstream
+#include <iostream> // used for std::cerr - like cout but for errors
+#include <set>  // used for std::set
+#include <sstream> // used for std::ostringstream
+#include <string>   // used for std::string
+#include <unordered_map>    // used for std::unordered_map
+#include <vector>   // used for std::vector
 
 namespace simulator_207610130_215664087 {
 
@@ -19,7 +19,11 @@ constexpr const char* kUsageText =
     "  ./simulator_<ids> -comparative simulation=<simulation_composition_yaml> mission_control_folder=<folder> algorithm=<algorithm_so> [num_threads=<num>] [-verbose]\n"
     "Usage (Competition Mode):\n"
     "  ./simulator_<ids> -competition simulation=<simulation_composition_yaml> mission_control=<mission_control_so> algorithms_folder=<folder> [num_threads=<num>] [-verbose]\n";
-
+/*
+    * returns true if the specified folder contains at least one .so file with the expected prefix.
+    * @param folder_path Path to the folder to check.
+    * @param expected_prefix Expected prefix for the .so files (e.g., "MissionControl" or "Algorithm").
+*/
 bool hasDesiredSoFiles(const std::filesystem::path& folder_path, const std::string& expected_prefix) {
     try {
         if (!std::filesystem::is_directory(folder_path)) {
@@ -38,7 +42,10 @@ bool hasDesiredSoFiles(const std::filesystem::path& folder_path, const std::stri
         return false;
     }
 }
-
+/*
+    * returns if the specified file exists and can be opened for reading.
+    * @param file_path Path to the file to check.
+    * */
 bool canOpenFile(const std::filesystem::path& file_path) {
     try {
         if (!std::filesystem::is_regular_file(file_path)) {
@@ -50,7 +57,10 @@ bool canOpenFile(const std::filesystem::path& file_path) {
         return false;
     }
 }
-
+/*
+    * returns if the given string represents a strict positive integer.
+    * @param str The string to check.
+    * @param result Reference to store the parsed integer value if valid.*/
 bool isStrictPositiveInteger(const std::string& str, std::size_t& result) {
     if (str.empty()) {
         return false;
@@ -72,13 +82,20 @@ bool isStrictPositiveInteger(const std::string& str, std::size_t& result) {
         return false;
     }
 }
-
+/*
+    * returns a formatted error message with usage instructions.
+    * @param error_message The error message to format.
+*/
 std::string formatErrorWithUsage(const std::string& error_message) {
     return error_message + "\n" + kUsageText;
 }
 
 } // namespace
-
+/*
+    * Parses the command line arguments and returns the parsed arguments.
+    * @param argc Number of command line arguments.
+    * @param argv Array of command line arguments.
+*/
 std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
     last_error_.clear();
 
@@ -139,7 +156,7 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
         return std::nullopt;
     }
 
-    // Mode-specific whitelist validation
+    // different arguments for each mode:
     const std::set<std::string> comparative_allowed = {
         "simulation", "mission_control_folder", "algorithm", "num_threads"
     };
@@ -153,7 +170,7 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
             unsupported_args.push_back(key + "=" + value);
         }
     }
-
+    // Check for unsupported arguments
     if (!unsupported_args.empty()) {
         std::ostringstream error_stream;
         error_stream << "Error: Unsupported command line arguments provided: ";
@@ -184,7 +201,7 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
     if (!kv_args.count("simulation")) {
         missing_args.push_back("simulation=<file.yaml>");
     }
-
+    // Mode-specific mandatory arguments
     if (args.mode == ExecutionMode::Comparative) {
         if (!kv_args.count("mission_control_folder")) {
             missing_args.push_back("mission_control_folder=<folder>");

@@ -10,32 +10,33 @@
 namespace mission_control_207610130_215664087 {
 
 /**
- * @class MissionControlImpl_207610130_215664087
- * @brief Concrete mission controller implementing common::IMissionControl interface.
- * 
  * Manages the execution loop of a single drone mapping mission: instantiates drone control,
  * steps through mission iterations, logs status, and outputs final map results.
  */
+
 class MissionControlImpl_207610130_215664087 final : public common::IMissionControl {
 public:
-    /**
-     * @brief Constructs a MissionControl instance from dependencies.
-     * @param dependencies MissionControlDependencies struct containing hardware and algorithm references.
-     */
+
+    // Creates the mission controller from the provided mission dependencies.
     explicit MissionControlImpl_207610130_215664087(common::MissionControlDependencies dependencies);
 
-    /**
-     * @brief Executes the complete drone mapping mission loop.
-     * @return MissionRunResult containing final status (Completed, MaxSteps, Error) and step count.
-     */
+  
+    // Runs the complete mapping mission until it finishes,
+    // reaches the maximum number of steps, or encounters an error.
     [[nodiscard]] common::types::MissionRunResult runMission() override;
 
 private:
+    // Configuration of the current mapping mission.
     common::types::MissionConfigData mission_config_;
+    // Drone capabilities and movement limits.
     common::types::DroneConfigData drone_config_;
+    // Map being built during the mission.
     common::IMutableMap3D& output_map_;
+    // File path where the final output map will be saved.
     std::filesystem::path output_map_file_;
+    // Controls whether detailed mission information is printed.
     bool verbose_ = false;
+     // Controls the drone one step at a time during the mission.
     DroneControlImpl drone_control_;
 };
 

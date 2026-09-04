@@ -11,13 +11,14 @@
 
 using mission_control_207610130_215664087::MissionControlImpl_207610130_215664087;
 
-// Global auto-registration macro call so that dlopen loads this factory automatically.
+// Registers this mission-control implementation so the simulator
+// can load it automatically at runtime.
 REGISTER_MISSION_CONTROL(MissionControlImpl_207610130_215664087);
 
 namespace mission_control_207610130_215664087 {
 
 namespace {
-
+// Adds an error with a code and message to the mission error list.
 void addError(std::vector<common::types::ErrorRef>& errors,
               std::string code,
               std::string message) {
@@ -26,6 +27,8 @@ void addError(std::vector<common::types::ErrorRef>& errors,
 
 } // namespace
 
+// Initializes mission control with all required configuration,
+// hardware interfaces, map, and mapping algorithm.
 MissionControlImpl_207610130_215664087::MissionControlImpl_207610130_215664087(
     common::MissionControlDependencies dependencies)
     : mission_config_(dependencies.mission_config),
@@ -33,6 +36,7 @@ MissionControlImpl_207610130_215664087::MissionControlImpl_207610130_215664087(
       output_map_(dependencies.output_map),
       output_map_file_(std::move(dependencies.output_map_file)),
       verbose_(dependencies.verbose),
+      // DroneControlImpl handles each individual drone step.
       drone_control_(dependencies.drone_config,
                      dependencies.mission_config,
                      dependencies.lidar,
@@ -41,11 +45,13 @@ MissionControlImpl_207610130_215664087::MissionControlImpl_207610130_215664087(
                      dependencies.output_map,
                      dependencies.mapping_algorithm) {}
 
-/**
- * @brief Runs the drone mission stepping loop up to mission_config_.max_steps.
- */
+
+
+// Runs the full mapping mission until the drone finishes,
+// an error occurs, or the maximum number of steps is reached.
 common::types::MissionRunResult MissionControlImpl_207610130_215664087::runMission() {
     std::ofstream verbose_log;
+    // Create a detailed log file when verbose mode is enabled.
     if (verbose_) {
         try {
             std::filesystem::path verbose_log_file =
@@ -57,10 +63,12 @@ common::types::MissionRunResult MissionControlImpl_207610130_215664087::runMissi
                             << "  Max steps: " << mission_config_.max_steps << "\n";
             }
         } catch (...) {
-            // Ignore file logging failure
+            // Logging is optional, so failure to create
+            // the log file does not stop the mission.
         }
     }
-
+    // Helper function used whenever the current output map
+    // needs to be saved to disk.
     auto saveOutputMap = [this, &verbose_log](std::vector<common::types::ErrorRef>& errors) {
         try {
             output_map_.save(output_map_file_);
@@ -82,10 +90,14 @@ common::types::MissionRunResult MissionControlImpl_207610130_215664087::runMissi
         return false;
     };
 
+    // Main mission loop.
     for (std::size_t executed_steps = 0; executed_steps < mission_config_.max_steps; ++executed_steps) {
+
+        // Execute one drone-control step.
         const common::types::DroneStepResult step_result = drone_control_.step();
         const std::size_t completed_steps = executed_steps + 1;
 
+        // Write information about each step when verbose logging is enabled.
         if (verbose_log.is_open()) {
             verbose_log << "[Step " << completed_steps << "/" << mission_config_.max_steps << "] "
                         << "status: " << (step_result.status == common::types::DroneStepStatus::Continue ? "Continue" :
@@ -93,9 +105,11 @@ common::types::MissionRunResult MissionControlImpl_207610130_215664087::runMissi
                         << (step_result.message.empty() ? "" : (" message: " + step_result.message))
                         << "\n";
         }
-
+        
+        // The mapping algorithm finished successfully.
         if (step_result.status == common::types::DroneStepStatus::Completed) {
             std::vector<common::types::ErrorRef> errors;
+            // Always save the final map before returning.
             if (!saveOutputMap(errors)) {
                 return common::types::MissionRunResult{common::types::MissionRunStatus::Error,
                                                        completed_steps,
@@ -110,13 +124,15 @@ common::types::MissionRunResult MissionControlImpl_207610130_215664087::runMissi
                                                    completed_steps,
                                                    {}};
         }
-
+        // A drone-control step failed.
         if (step_result.status == common::types::DroneStepStatus::Error) {
             std::vector<common::types::ErrorRef> errors;
             addError(errors,
                      "DRONE_STEP_FAILED",
                      step_result.message.empty() ? "Drone control step failed."
                                                  : step_result.message);
+            
+            // Try to save the partially generated map even after an error.                                    
             saveOutputMap(errors);
 
             if (verbose_log.is_open()) {
@@ -130,7 +146,9 @@ common::types::MissionRunResult MissionControlImpl_207610130_215664087::runMissi
         }
     }
 
+    // The algorithm did not finish before reaching max_steps.
     std::vector<common::types::ErrorRef> errors;
+    // Save the map that was generated up to this point.
     if (!saveOutputMap(errors)) {
         return common::types::MissionRunResult{common::types::MissionRunStatus::Error,
                                                mission_config_.max_steps,

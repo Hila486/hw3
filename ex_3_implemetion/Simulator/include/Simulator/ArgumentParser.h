@@ -8,32 +8,29 @@
 namespace simulator_207610130_215664087 {
 
 /**
- * @enum ExecutionMode
- * @brief Simulation run mode (Comparative vs Competitive).
+ * Simulation run mode (Comparative vs Competitive).
  */
 enum class ExecutionMode {
-    Comparative,  ///< -comparative: runs multiple MissionControls against single algorithm
-    Competition   ///< -competition: runs multiple Algorithms against single MissionControl
+    Comparative,  //comparative: runs multiple MissionControls against single algorithm
+    Competition   //ompetition: runs multiple Algorithms against single MissionControl
 };
 
 /**
- * @struct ParsedArgs
- * @brief Holds validated command-line arguments.
+ *  Holds validated command-line arguments.
  */
 struct ParsedArgs {
     ExecutionMode mode = ExecutionMode::Comparative;
-    std::filesystem::path simulation_file;        ///< YAML composition file path
-    std::filesystem::path mission_control_folder; ///< Folder containing MissionControl .so files (Comparative)
-    std::filesystem::path mission_control_file;   ///< Single MissionControl .so file path (Competition)
-    std::filesystem::path algorithm_file;        ///< Single Algorithm .so file path (Comparative)
-    std::filesystem::path algorithms_folder;     ///< Folder containing Algorithm .so files (Competition)
-    std::size_t num_threads = 1;                  ///< Number of worker threads (default 1)
-    bool verbose = false;                         ///< Verbose logging flag
+    std::filesystem::path simulation_file;        // YAML composition file path
+    std::filesystem::path mission_control_folder; // Folder containing MissionControl .so files (Comparative)
+    std::filesystem::path mission_control_file;   // Single MissionControl .so file path (Competition)
+    std::filesystem::path algorithm_file;        // Single Algorithm .so file path (Comparative)
+    std::filesystem::path algorithms_folder;     // Folder containing Algorithm .so files (Competition)
+    std::size_t num_threads = 1;                  // Number of worker threads (default 1)
+    bool verbose = false;                         // Verbose logging flag
 };
 
 /**
- * @class ArgumentParser
- * @brief Parses and validates command-line arguments for the simulator.
+ *  Parses and validates command-line arguments for the simulator.
  */
 class ArgumentParser {
 public:

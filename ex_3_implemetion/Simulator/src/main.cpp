@@ -6,10 +6,12 @@
 using namespace simulator_207610130_215664087;
 
 /**
- * @brief Main entry point for simulator_207610130_215664087 executable.
+ * 1. Parse arguments
+ * 2. Construct SimulationEngine
+ * 3. Run SimulationEngine
  */
 int main(int argc, char* argv[]) {
-    auto parsed_args = ArgumentParser::parse(argc, argv);
+    auto parsed_args = ArgumentParser::parse(argc, argv); // type = std::optional<ParsedArgs>
     if (!parsed_args) {
         std::cerr << ArgumentParser::getLastError() << std::endl;
         return 1;

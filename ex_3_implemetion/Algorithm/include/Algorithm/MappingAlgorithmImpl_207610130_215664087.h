@@ -12,72 +12,86 @@ namespace algorithm_207610130_215664087 {
 
 using namespace common;
 
-/**
- * @class MappingAlgorithmImpl_207610130_215664087
- * @brief Concrete drone mapping and exploration algorithm implementing common::IMappingAlgorithm.
- * 
- * Uses Depth-First Search (DFS) cell exploration over 3D discrete space to systematically scan 
- * and discover unknown voxel space while respecting drone physical bounds and battery limits.
- */
+
+// Concrete mapping algorithm.
+// Uses DFS over a discrete 3D grid to explore, scan, and backtrack through the map.
 class MappingAlgorithmImpl_207610130_215664087 final : public common::IMappingAlgorithm {
 public:
-    /**
-     * @brief Constructs mapping algorithm with dependencies (mission config, lidar config, drone config, map).
-     * @param dependencies Common mapping algorithm dependencies struct.
-     */
+
+    // Reuse the base-class constructor that receives all algorithm dependencies.
     using common::IMappingAlgorithm::IMappingAlgorithm;
 
-    /**
-     * @brief Determines the next mapping step command based on current state and scan data.
-     * @param state Current position, heading, and step count.
-     * @param latest_scan Pointer to latest LiDAR scan hits result.
-     * @return MappingStepCommand specifying scan orientation or movement.
-     */
+
+    // Decides what the drone should do next based on its current state
+    // and the most recent lidar scan.
     [[nodiscard]] common::types::MappingStepCommand nextStep(
         const common::types::DroneState& state,
         const common::types::LidarScanResult* latest_scan) override;
 
 private:
-    /// Discrete 3D grid cell identifier for DFS exploration.
+     // Represents one discrete cell in the 3D exploration grid.
     struct GridCell {
         int x = 0;
         int y = 0;
         int z = 0;
 
+        // Needed so GridCell can be stored inside std::set.
         [[nodiscard]] bool operator<(const GridCell& other) const;
+        // Checks whether two grid cells are the same.
         [[nodiscard]] bool operator==(const GridCell& other) const;
     };
 
-    /// Path node storing cell grid location and 3D world coordinate.
+    // Stores both a grid cell and its corresponding real-world position.
     struct PathNode {
         GridCell cell{};
         Position3D position{};
     };
 
-    /// Target destination for drone movement during exploration or backtracking.
+    // Describes where the drone should navigate next.
     struct NavigationTarget {
         PathNode node{};
+        // True when returning along the DFS path.
         bool backtracking = false;
+        // True when this movement is vertical.
         bool vertical = false;
+        // Heading needed before horizontal movement.
         double desired_heading_degrees = 0.0;
+        // Distance to the target.
         PhysicalLength distance{};
     };
 
+    // Converts a real-world position into a discrete DFS grid cell.
     [[nodiscard]] GridCell cellFromPosition(const Position3D& position) const;
+
+    // Returns the distance between neighboring exploration cells.
     [[nodiscard]] PhysicalLength planningStep() const;
+    
+    // Checks whether the drone's center can legally be placed at this position.
     [[nodiscard]] bool isLegalDroneCenter(const Position3D& position) const;
+    
+    // Searches for the next DFS exploration target.
+    // If no new neighbor is available, it may choose a backtracking target.
     [[nodiscard]] std::optional<NavigationTarget> findExplorationTarget(
         const common::types::DroneState& state,
         const GridCell& current_cell) const;
+
+    // Converts a navigation target into the next required movement command.
     [[nodiscard]] common::types::MappingStepCommand commandForTarget(
         const common::types::DroneState& state,
         const GridCell& current_cell,
         const NavigationTarget& target);
-    [[nodiscard]] common::types::MappingStepCommand scanCommand(std::size_t scan_index);
-    [[nodiscard]] common::types::MappingStepCommand finishCommand() const;
 
+     // Creates one lidar scan command from the cell's scan sequence.
+    [[nodiscard]] common::types::MappingStepCommand scanCommand(std::size_t scan_index);
+
+    // Creates the command that tells mission control mapping is finished.
+    [[nodiscard]] common::types::MappingStepCommand finishCommand() const;
+    
+    // Initializes DFS state when the algorithm starts.
     void initializeAtCurrentCell(const GridCell& current_cell, const Position3D& position);
+    // Handles the result of a previously requested movement.
     void handlePendingTranslationResult(const GridCell& current_cell);
+    // Starts/restarts the scan sequence for a cell.
     void resetScanSequenceForCell(const GridCell& current_cell);
 
     std::set<GridCell> visited_cells_;              ///< Set of fully explored grid cells
