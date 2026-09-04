@@ -141,7 +141,12 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
                 std::string key = arg.substr(0, pos);
                 std::string value = arg.substr(pos + 1);
                 if (known_keys.count(key)) {
-                    kv_args[key] = value;
+                    if (kv_args.count(key)) {
+                        // Duplicate key: reject rather than silently keeping last value
+                        unsupported_args.push_back("duplicate:" + arg);
+                    } else {
+                        kv_args[key] = value;
+                    }
                 } else {
                     unsupported_args.push_back(arg);
                 }
@@ -149,6 +154,18 @@ std::optional<ParsedArgs> ArgumentParser::parse(int argc, char* argv[]) {
                 unsupported_args.push_back(arg);
             }
         }
+    }
+
+    // Report unsupported/duplicate arguments first, even if mode is missing.
+    if (!unsupported_args.empty()) {
+        std::ostringstream error_stream;
+        error_stream << "Error: Unsupported command line arguments provided: ";
+        for (std::size_t i = 0; i < unsupported_args.size(); ++i) {
+            if (i > 0) error_stream << ", ";
+            error_stream << unsupported_args[i];
+        }
+        last_error_ = formatErrorWithUsage(error_stream.str());
+        return std::nullopt;
     }
 
     if (!mode) {

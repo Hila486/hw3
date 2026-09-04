@@ -426,23 +426,26 @@ bool SimulationEngine::runComparative() {
                   << args_.mission_control_folder.string() << "\n";
         return false;
     }
-    // Parse all simulation, mission, drone and lidar configurations.
-    SimulationCompositionData composition;
-    try {
-        composition = ConfigParser::parseSimulationComposition(args_.simulation_file);
-    } catch (const std::exception& ex) {
-        std::cerr << "Error parsing composition file: " << ex.what() << "\n";
-        return false;
-    }
-    // Preserve original YAML filenames for the reports.
-    const RawCompositionLayout raw_layout = readRawLayout(args_.simulation_file);
-
-    // Create directory for all comparative-mode results.
+    // Create output directory FIRST so that any subsequent parse errors
+    // can be logged to error_log.txt inside it.
     const std::filesystem::path output_dir =
         createUniqueOutputDir(args_.mission_control_folder, "comparative_results");
     if (output_dir.empty()) {
         return false;
     }
+
+    // Parse all simulation, mission, drone and lidar configurations.
+    SimulationCompositionData composition;
+    try {
+        composition = ConfigParser::parseSimulationComposition(args_.simulation_file);
+    } catch (const std::exception& ex) {
+        const std::string msg = std::string("Error parsing composition file: ") + ex.what();
+        std::cerr << msg << "\n";
+        ResultExporter::logErrorImmediately(output_dir, msg);
+        return false;
+    }
+    // Preserve original YAML filenames for the reports.
+    const RawCompositionLayout raw_layout = readRawLayout(args_.simulation_file);
 
     // -------------------------------------------------------------------------
     // Build every simulation combination.
@@ -626,6 +629,8 @@ bool SimulationEngine::runComparative() {
 
     // -------------------------------------------------------------------------
     // Combine all individual runs into one result per MissionControl.
+    // A plugin whose every run failed (score == -1) is moved to errors:
+    // matching the spec: "could not be loaded / run".
     // -------------------------------------------------------------------------
     std::vector<ComparativeManagerResult> manager_results;
     for (std::size_t m = 0; m < preloaded_mcs.size(); ++m) {
@@ -633,11 +638,28 @@ bool SimulationEngine::runComparative() {
         mgr_result.manager_so_name = preloaded_mcs[m].so_name;
         mgr_result.individual_runs = std::move(all_results[m]);
 
+        bool all_runs_failed = !mgr_result.individual_runs.empty();
         for (const auto& run : mgr_result.individual_runs) {
             mgr_result.total_score += run.score;
             mgr_result.total_steps += run.steps;
+            if (run.score >= 0.0) {
+                all_runs_failed = false;
+            }
         }
-        manager_results.push_back(std::move(mgr_result));
+
+        if (all_runs_failed) {
+            // Plugin loaded but could not successfully run any scenario.
+            error_managers.push_back(mgr_result.manager_so_name);
+            ResultExporter::logErrorImmediately(
+                output_dir,
+                mgr_result.manager_so_name + " failed all runs and was moved to errors.");
+            // Still emit its per-SO report for traceability.
+            ResultExporter::exportPerSoReport(
+                output_dir, mgr_result.manager_so_name,
+                args_.simulation_file, mgr_result.individual_runs);
+        } else {
+            manager_results.push_back(std::move(mgr_result));
+        }
     }
 
     // Export comparative summary and individual reports.
@@ -686,22 +708,26 @@ bool SimulationEngine::runCompetitive() {
         return false;
     }
 
-    // Parse all simulation configurations.
-    SimulationCompositionData composition;
-    try {
-        composition = ConfigParser::parseSimulationComposition(args_.simulation_file);
-    } catch (const std::exception& ex) {
-        std::cerr << "Error parsing composition file: " << ex.what() << "\n";
-        return false;
-    }
-
-    const RawCompositionLayout raw_layout = readRawLayout(args_.simulation_file);
-     // Create competition output directory.
+    // Create competition output directory FIRST so that any subsequent parse
+    // errors can be logged to error_log.txt inside it.
     const std::filesystem::path output_dir =
         createUniqueOutputDir(args_.algorithms_folder, "competition");
     if (output_dir.empty()) {
         return false;
     }
+
+    // Parse all simulation configurations.
+    SimulationCompositionData composition;
+    try {
+        composition = ConfigParser::parseSimulationComposition(args_.simulation_file);
+    } catch (const std::exception& ex) {
+        const std::string msg = std::string("Error parsing composition file: ") + ex.what();
+        std::cerr << msg << "\n";
+        ResultExporter::logErrorImmediately(output_dir, msg);
+        return false;
+    }
+
+    const RawCompositionLayout raw_layout = readRawLayout(args_.simulation_file);
     // -------------------------------------------------------------------------
     // Build all simulation × mission × drone × lidar combinations.
     // -------------------------------------------------------------------------
@@ -874,6 +900,8 @@ bool SimulationEngine::runCompetitive() {
     
     // -------------------------------------------------------------------------
     // Aggregate individual runs into one result per Algorithm.
+    // A plugin whose every run failed (score == -1) is moved to errors:
+    // matching the spec: "could not be loaded / run".
     // -------------------------------------------------------------------------
     std::vector<CompetitiveAlgoResult> algo_results;
     for (std::size_t a = 0; a < preloaded_algos.size(); ++a) {
@@ -881,11 +909,26 @@ bool SimulationEngine::runCompetitive() {
         algo_result.algorithm_so_name = preloaded_algos[a].so_name;
         algo_result.individual_runs = std::move(all_results[a]);
 
+        bool all_runs_failed = !algo_result.individual_runs.empty();
         for (const auto& run : algo_result.individual_runs) {
             algo_result.total_score += run.score;
             algo_result.total_steps += run.steps;
+            if (run.score >= 0.0) {
+                all_runs_failed = false;
+            }
         }
-        algo_results.push_back(std::move(algo_result));
+
+        if (all_runs_failed) {
+            error_algorithms.push_back(algo_result.algorithm_so_name);
+            ResultExporter::logErrorImmediately(
+                output_dir,
+                algo_result.algorithm_so_name + " failed all runs and was moved to errors.");
+            ResultExporter::exportPerSoReport(
+                output_dir, algo_result.algorithm_so_name,
+                args_.simulation_file, algo_result.individual_runs);
+        } else {
+            algo_results.push_back(std::move(algo_result));
+        }
     }
     // Export competition reports.
     ResultExporter::exportCompetitiveReport(
