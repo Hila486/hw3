@@ -152,7 +152,7 @@ void saveNpyMap(const std::filesystem::path& file_path, const NpyArray3D& map_ar
     file.write(reinterpret_cast<const char*>(&minor), 1);
 
     std::ostringstream ss;
-    ss << "{'descr': '<i4', 'fortran_order': False, 'shape': ("
+    ss << "{'descr': '|i1', 'fortran_order': False, 'shape': ("
        << map_array.shape[0] << ", "
        << map_array.shape[1] << ", "
        << map_array.shape[2] << "), }";
@@ -169,8 +169,8 @@ void saveNpyMap(const std::filesystem::path& file_path, const NpyArray3D& map_ar
     file.write(reinterpret_cast<const char*>(&hlen), 2);
     file.write(header_dict.data(), header_dict.size());
 
-    std::vector<int32_t> int32_data(map_array.data.begin(), map_array.data.end());
-    file.write(reinterpret_cast<const char*>(int32_data.data()), int32_data.size() * sizeof(int32_t));
+    std::vector<int8_t> int8_data(map_array.data.begin(), map_array.data.end());
+    file.write(reinterpret_cast<const char*>(int8_data.data()), int8_data.size() * sizeof(int8_t));
 }
 
 } // namespace simulator_207610130_215664087

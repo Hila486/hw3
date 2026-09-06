@@ -422,18 +422,13 @@ bool SimulationEngine::run() {
 // One Algorithm is tested with multiple MissionControl implementations.
 // =============================================================================
 bool SimulationEngine::runComparative() {
+    std::vector<std::string> error_managers;
+
     // Find all MissionControl plugins.
     const auto mc_files = discoverSoFiles(args_.mission_control_folder, "MissionControl");
     if (mc_files.empty()) {
         std::cerr << "Error: No MissionControl*.so files found in: "
                   << args_.mission_control_folder.string() << "\n";
-        return false;
-    }
-    // Create output directory FIRST so that any subsequent parse errors
-    // can be logged to error_log.txt inside it.
-    const std::filesystem::path output_dir =
-        createUniqueOutputDir(args_.mission_control_folder, "comparative_results");
-    if (output_dir.empty()) {
         return false;
     }
 
@@ -442,14 +437,7 @@ bool SimulationEngine::runComparative() {
     try {
         composition = ConfigParser::parseSimulationComposition(args_.simulation_file);
     } catch (const std::exception& ex) {
-        const std::string msg = std::string("Error parsing composition file: ") + ex.what();
-        std::cerr << msg << "\n";
-        ResultExporter::logErrorImmediately(output_dir, msg);
-        ResultExporter::exportComparativeReport(
-            output_dir,
-            args_.simulation_file.filename().string(),
-            getCleanDirectoryName(args_.mission_control_folder),
-            {}, {});
+        std::cerr << "Error parsing composition file: " << ex.what() << "\n";
         return false;
     }
     // Preserve original YAML filenames for the reports.
@@ -501,6 +489,26 @@ bool SimulationEngine::runComparative() {
         }
     }
 
+    // Load the single Algorithm used for every comparative run before creating output dir.
+    auto algo_loader = preloadLibrary(args_.algorithm_file, {});
+    if (!algo_loader) {
+        std::cerr << "Error: Failed to load algorithm .so: " << args_.algorithm_file.string() << "\n";
+        return false;
+    }
+    auto algo_factory_opt = algo_loader->getAlgorithmFactory();
+    if (!algo_factory_opt) {
+        std::cerr << "Error: Algorithm .so did not register a factory: " << args_.algorithm_file.string() << "\n";
+        return false;
+    }
+    common::MappingAlgorithmFactory algo_factory = *algo_factory_opt;
+
+    // Create output directory ONLY now that inputs and fixed plugin are verified.
+    const std::filesystem::path output_dir =
+        createUniqueOutputDir(args_.mission_control_folder, "comparative_results");
+    if (output_dir.empty()) {
+        return false;
+    }
+
     if (run_specs.empty()) {
         const std::string msg = "Error: No simulation scenarios generated from composition file.";
         std::cerr << msg << "\n";
@@ -510,39 +518,8 @@ bool SimulationEngine::runComparative() {
             args_.simulation_file.filename().string(),
             getCleanDirectoryName(args_.mission_control_folder),
             {}, {});
-        return false;
+        return true;
     }
-
-    // -------------------------------------------------------------------------
-    // Pre-load plugins on the main thread.
-    //
-    // Dynamic loading and registration happen before worker threads begin.
-    // -------------------------------------------------------------------------
-
-    std::vector<std::string> error_managers;
-
-     // Load the single Algorithm used for every comparative run.
-    auto algo_loader = preloadLibrary(args_.algorithm_file, output_dir);
-    if (!algo_loader) {
-        std::cerr << "Error: Failed to load algorithm .so.\n";
-        ResultExporter::exportComparativeReport(
-            output_dir,
-            args_.simulation_file.filename().string(),
-            getCleanDirectoryName(args_.mission_control_folder),
-            {}, {args_.algorithm_file.filename().string()});
-        return false;
-    }
-    auto algo_factory_opt = algo_loader->getAlgorithmFactory();
-    if (!algo_factory_opt) {
-        std::cerr << "Error: Algorithm .so did not register a factory.\n";
-        ResultExporter::exportComparativeReport(
-            output_dir,
-            args_.simulation_file.filename().string(),
-            getCleanDirectoryName(args_.mission_control_folder),
-            {}, {args_.algorithm_file.filename().string()});
-        return false;
-    }
-    common::MappingAlgorithmFactory algo_factory = *algo_factory_opt;
 
     // Stores each loaded MissionControl together with its factory.
     struct PreloadedMC {
@@ -659,12 +636,23 @@ bool SimulationEngine::runComparative() {
         mgr_result.manager_so_name = preloaded_mcs[m].so_name;
         mgr_result.individual_runs = std::move(all_results[m]);
 
+        bool all_failed = true;
         for (const auto& run : mgr_result.individual_runs) {
             mgr_result.total_score += run.score;
             mgr_result.total_steps += run.steps;
+            if (run.score >= 0.0 && run.status != "error" && run.status != "Error") {
+                all_failed = false;
+            }
         }
-        manager_results.push_back(std::move(mgr_result));
+
+        if (all_failed) {
+            error_managers.push_back(preloaded_mcs[m].so_name);
+        } else {
+            manager_results.push_back(std::move(mgr_result));
+        }
     }
+    std::sort(error_managers.begin(), error_managers.end());
+    error_managers.erase(std::unique(error_managers.begin(), error_managers.end()), error_managers.end());
 
     // Export comparative summary and individual reports.
     ResultExporter::exportComparativeReport(
@@ -712,27 +700,12 @@ bool SimulationEngine::runCompetitive() {
         return false;
     }
 
-    // Create competition output directory FIRST so that any subsequent parse
-    // errors can be logged to error_log.txt inside it.
-    const std::filesystem::path output_dir =
-        createUniqueOutputDir(args_.algorithms_folder, "competition");
-    if (output_dir.empty()) {
-        return false;
-    }
-
     // Parse all simulation configurations.
     SimulationCompositionData composition;
     try {
         composition = ConfigParser::parseSimulationComposition(args_.simulation_file);
     } catch (const std::exception& ex) {
-        const std::string msg = std::string("Error parsing composition file: ") + ex.what();
-        std::cerr << msg << "\n";
-        ResultExporter::logErrorImmediately(output_dir, msg);
-        ResultExporter::exportCompetitiveReport(
-            output_dir,
-            args_.simulation_file.filename().string(),
-            args_.mission_control_file.filename().string(),
-            {}, {});
+        std::cerr << "Error parsing composition file: " << ex.what() << "\n";
         return false;
     }
 
@@ -781,6 +754,26 @@ bool SimulationEngine::runCompetitive() {
         }
     }
 
+    // Load the single MissionControl used by all algorithms before creating output dir.
+    auto mc_loader = preloadLibrary(args_.mission_control_file, {});
+    if (!mc_loader) {
+        std::cerr << "Error: Failed to load mission control .so: " << args_.mission_control_file.string() << "\n";
+        return false;
+    }
+    auto mc_factory_opt = mc_loader->getMissionControlFactory();
+    if (!mc_factory_opt) {
+        std::cerr << "Error: MissionControl .so did not register a factory: " << args_.mission_control_file.string() << "\n";
+        return false;
+    }
+    common::MissionControlFactory mc_factory = *mc_factory_opt;
+
+    // NOW create competition output directory!
+    const std::filesystem::path output_dir =
+        createUniqueOutputDir(args_.algorithms_folder, "competition");
+    if (output_dir.empty()) {
+        return false;
+    }
+
     if (run_specs.empty()) {
         const std::string msg = "Error: No simulation scenarios generated from composition file.";
         std::cerr << msg << "\n";
@@ -790,36 +783,10 @@ bool SimulationEngine::runCompetitive() {
             args_.simulation_file.filename().string(),
             args_.mission_control_file.filename().string(),
             {}, {});
-        return false;
+        return true;
     }
 
-    // -------------------------------------------------------------------------
-    // Load the single MissionControl and all Algorithm plugins.
-    // -------------------------------------------------------------------------
     std::vector<std::string> error_algorithms;
-
-    // Fixed MissionControl used by all algorithms.
-    auto mc_loader = preloadLibrary(args_.mission_control_file, output_dir);
-    if (!mc_loader) {
-        std::cerr << "Error: Failed to load mission control .so.\n";
-        ResultExporter::exportCompetitiveReport(
-            output_dir,
-            args_.simulation_file.filename().string(),
-            args_.mission_control_file.filename().string(),
-            {}, {args_.mission_control_file.filename().string()});
-        return false;
-    }
-    auto mc_factory_opt = mc_loader->getMissionControlFactory();
-    if (!mc_factory_opt) {
-        std::cerr << "Error: MissionControl .so did not register a factory.\n";
-        ResultExporter::exportCompetitiveReport(
-            output_dir,
-            args_.simulation_file.filename().string(),
-            args_.mission_control_file.filename().string(),
-            {}, {args_.mission_control_file.filename().string()});
-        return false;
-    }
-    common::MissionControlFactory mc_factory = *mc_factory_opt;
 
     // Keeps every Algorithm library alive together with its factory.
     struct PreloadedAlgo {
@@ -933,12 +900,23 @@ bool SimulationEngine::runCompetitive() {
         algo_result.algorithm_so_name = preloaded_algos[a].so_name;
         algo_result.individual_runs = std::move(all_results[a]);
 
+        bool all_failed = true;
         for (const auto& run : algo_result.individual_runs) {
             algo_result.total_score += run.score;
             algo_result.total_steps += run.steps;
+            if (run.score >= 0.0 && run.status != "error" && run.status != "Error") {
+                all_failed = false;
+            }
         }
-        algo_results.push_back(std::move(algo_result));
+
+        if (all_failed) {
+            error_algorithms.push_back(preloaded_algos[a].so_name);
+        } else {
+            algo_results.push_back(std::move(algo_result));
+        }
     }
+    std::sort(error_algorithms.begin(), error_algorithms.end());
+    error_algorithms.erase(std::unique(error_algorithms.begin(), error_algorithms.end()), error_algorithms.end());
     // Export competition reports.
     ResultExporter::exportCompetitiveReport(
         output_dir,

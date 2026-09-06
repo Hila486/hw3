@@ -102,7 +102,7 @@ std::string ResultExporter::getFolderTimestamp() {
     gmtime_r(&now_c, &utc_tm);
 #endif
     std::ostringstream ss;
-    ss << std::put_time(&utc_tm, "%Y%m%d_%H%M%S_") << std::setfill('0') << std::setw(3) << ms.count();
+    ss << std::put_time(&utc_tm, "%Y%m%d%H%M%S") << std::setfill('0') << std::setw(3) << ms.count();
     return ss.str();
 }
 
@@ -136,7 +136,7 @@ void ResultExporter::exportComparativeReport(
         return a.total_steps < b.total_steps;
     });
 
-    const std::filesystem::path report_path = output_dir / "comparative_simulation_report.yaml";
+    const std::filesystem::path report_path = output_dir / "comparative_report.yaml";
     std::ofstream out(report_path);
     if (!out) {
         std::cerr << "Error: Failed to create comparative report file at " << report_path.string() << std::endl;
@@ -187,7 +187,7 @@ void ResultExporter::exportCompetitiveReport(
         return a.total_steps < b.total_steps;
     });
 
-    const std::filesystem::path report_path = output_dir / "competitive_simulation_report.yaml";
+    const std::filesystem::path report_path = output_dir / "competitive_report.yaml";
     std::ofstream out(report_path);
     if (!out) {
         std::cerr << "Error: Failed to create competitive report file at " << report_path.string() << std::endl;
